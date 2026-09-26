@@ -1,0 +1,36 @@
+# Cấu hình chung. Chỉ cần ghi những gì muốn thay đổi so với mặc định
+# (xem weplan_export/config.py -> DEFAULT_CONFIG để biết đầy đủ).
+
+base_url: https://dashboard.weplananalytics.com
+start_path: /app/bi/coverage
+output_dir: downloads            # nơi lưu file tải về
+
+auth:
+  storage_state: .auth/state.json  # session đăng nhập (tạo bằng lệnh `login`)
+
+browser:
+  headless: true
+  # Dùng Chrome/Edge đã cài sẵn trên máy thay vì Chromium của Playwright:
+  # channel: chrome             # hoặc msedge
+  slow_mo: 0
+
+timeouts:                        # mili-giây
+  default: 30000
+  navigation: 90000
+  data_load: 300000              # chờ tối đa 5 phút cho data load lên table
+  download: 180000
+
+date:
+  # Cách nhập khoảng thời gian:
+  #   input    : gõ "08/01/2026 - 08/31/2026" vào ô date
+  #   calendar : bấm chọn ngày trên lịch popup
+  mode: input
+  input_format: "%m/%d/%Y"
+  range_separator: " - "
+
+selectors:
+  # Chỉnh ở đây nếu giao diện web thay đổi.
+  datepicker_input: "#datepicker input"
+  table_container: "#tableProvinces"
+  table_rows: "#tableProvinces table tbody tr"
+  download_button_text: "Download table"

@@ -1,0 +1,61 @@
+# Các ví dụ nâng cao. Chạy riêng:  python -m weplan_export run scenarios/examples_advanced.yaml
+#
+# `before` / `after` được chèn vào đầu / cuối mọi scenario trong file.
+vars:
+  from: 2026-08-01
+  to: 2026-08-31
+
+after:
+  - screenshot: done                          # chụp màn hình cuối mỗi scenario (downloads/screenshots)
+
+scenarios:
+  # Menu nhiều cấp: Latency > Latency Mobile (Cellular)
+  - name: latency_mobile_macro_csv
+    tags: [latency]
+    steps:
+      - open_menu: ["Latency", "Latency Mobile (Cellular)"]
+      - select_country: Burundi
+      - set_date: {from: "${from}", to: "${to}"}
+      - choose_view: macro
+      - wait_for_table: {}
+      - download_table: {format: csv}
+
+  # Nhiều KPI cùng bộ lọc, mỗi KPI 1 file
+  - name: macro_${kpi}
+    matrix:
+      kpi: [coverage, signal, rsrq, phoneCall, traffic]
+    steps:
+      - goto: /app/bi/${kpi}
+      - select_country: Burundi
+      - set_date: {from: "${from}", to: "${to}"}
+      - filters:                              # nhiều bộ lọc một lúc (id select: danh sách giá trị)
+          carrier_filter: [ECONET, LUMITEL]
+          origin_filter: [Weplan]
+      - choose_view: macro
+      - wait_for_table: {}
+      - download_table:
+          format: xlsx
+          filename: "${kpi}/${country}_${date_from}_${date_to}"
+
+  # Theo tỉnh (admin_1) + đổi grouping sau khi có kết quả
+  - name: coverage_by_provinces_grouped_by_network
+    steps:
+      - open_menu: ["Coverage time"]
+      - select_country: Burundi
+      - set_date: {from: "${from}", to: "${to}"}
+      - choose_view: admin_1                  # thẻ "By provinces"
+      - wait_for_table: {}
+      - select_filter: {id: group_selector, options: [carrier]}
+      - apply: {}                             # bấm "Parameters changed..." nếu xuất hiện
+      - wait_for_table: {}
+      - download_table: {format: xlsx}
+
+  # Dùng các bước thao tác tự do khi cần (click / fill / wait_for / screenshot / pause ...)
+  - name: custom_steps_example
+    skip: true                                # bỏ dòng này để chạy
+    steps:
+      - open_menu: /app/bi/coverage
+      - click: {text: "Macro data"}
+      - wait_for: "#results"
+      - screenshot: after_macro
+      - pause: {}                             # mở Playwright Inspector (cần --headed)

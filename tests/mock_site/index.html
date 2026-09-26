@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mock dashboard</title>
+<!-- Minimal imitation of the Weplan dashboard DOM, used by the tests. -->
+<style>
+  .d-none { display: none !important; }
+  .mm-collapse { display: none; }
+  .mm-show { display: block; }
+  .dropdown-menu { display: none; border: 1px solid #ccc; }
+  .dropdown-menu.show { display: block; }
+  #calendar { display: none; }
+  body { display: flex; font-family: sans-serif; }
+  aside { width: 240px; }
+</style>
+<script>var dateLimits = {"maxDate":"20260923","minDate":"20250923","dayLag":2};</script>
+</head>
+<body class="dashboard">
+<div id="app" style="display:flex">
+<aside class="navbar-default dash-sidebar sidebar-common">
+  <ul class="side-menu metismenu">
+    <li><a href="/app/bi/coverage"><div>Coverage time</div></a></li>
+    <li><a class="has-arrow" href="#"><div>Signal &amp; Quality</div></a>
+      <ul class="mm-collapse">
+        <li><a href="/app/bi/signal"><div>Average signal level</div></a></li>
+      </ul>
+    </li>
+    <li><a class="has-arrow" href="#"><div>Latency</div></a>
+      <ul class="mm-collapse">
+        <li><a href="/app/bi/latencyMobile"><div>Latency Mobile (Cellular)</div></a></li>
+        <li><a href="/app/bi/latencyWifi"><div>Latency Fixed (Wi-Fi)</div></a></li>
+      </ul>
+    </li>
+    <li><a class="has-arrow" href="#"><div>Throughput</div></a>
+      <ul class="mm-collapse">
+        <li><a href="/app/bi/globalThroughputNetwork"><div>Mobile (Cellular)</div></a></li>
+      </ul>
+    </li>
+  </ul>
+</aside>
+<div id="dash">
+  <h1 id="kpiTitle"></h1>
+  <select class="selectpicker country-switcher" id="dropdownCountryChooser">
+    <option value="bi">Burundi</option><option value="kh">Cambodia</option><option value="ht">Haiti</option>
+  </select>
+  <div id="basicFiltersRow">
+    <div id="datepicker"><input type="text" class="p-inputtext"></div>
+    <select id="carrier_filter" class="selectpicker basicFilter" multiple></select>
+    <select id="coverage_filter" class="selectpicker basicFilter" multiple>
+      <option value="2G">2G</option><option value="3G">3G</option><option value="4G">4G</option>
+    </select>
+    <select id="origin_filter" class="selectpicker basicFilter" multiple>
+      <option value="Viettel">Viettel</option><option value="Weplan">Weplan</option>
+    </select>
+    <select class="form-control selectpicker" id="group_selector">
+      <option value="all">All</option><option value="carrier">Cellular network</option>
+    </select>
+  </div>
+  <div id="updateButtonRow" class="d-none"><button id="updateButton">Parameters changed. Click here to execute new query</button></div>
+  <div id="errors_row" class="d-none"><h5 id="error_message"></h5></div>
+  <div id="placeholder-row">
+    <a href="#" class="chartModeSelector" id="byCountry"><div class="card-footer">Macro data</div></a>
+    <a href="#" class="chartModeSelector" id="byRegions"><div class="card-footer">By provinces</div></a>
+    <div class="panelLoader d-none" id="loader">Loading...</div>
+  </div>
+  <div id="results" class="d-none">
+    <div id="tableProvinces">
+      <div class="btn-group">
+        <button type="button" id="dlBtn"><i class="fa fa-download"></i> Download table</button>
+        <div class="dropdown-menu" id="dlMenu">
+          <a class="dropdown-item" href="#" data-format="xlsx">Excel (.xlsx)</a>
+          <a class="dropdown-item" href="#" data-format="csv">CSV</a>
+        </div>
+      </div>
+      <table><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+</div>
+<script>
+const params = new URLSearchParams(location.search);
+const country = params.get('country') || 'bi';
+const carriers = {bi: ['ECONET', 'LUMITEL', 'ONAMOB'], kh: ['CELLCARD', 'METFONE', 'SMART'], ht: ['DIGICEL', 'NATCOM']};
+const $ = s => document.querySelector(s);
+document.getElementById('kpiTitle').textContent = location.pathname;
+$('#dropdownCountryChooser').value = country;
+// Carrier options arrive asynchronously, like the real dashboard.
+setTimeout(() => {
+  for (const c of carriers[country]) $('#carrier_filter').add(new Option(c, c));
+}, 700);
+
+document.querySelectorAll('a.has-arrow').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault(); a.nextElementSibling.classList.toggle('mm-show');
+}));
+$('#dropdownCountryChooser').addEventListener('change', e => {
+  location.href = location.pathname + '?country=' + e.target.value;
+});
+
+let dateRange = null;
+$('#datepicker input').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const m = e.target.value.match(/^(\d\d)\/(\d\d)\/(\d{4}) - (\d\d)\/(\d\d)\/(\d{4})$/);
+  if (!m) { e.target.value = ''; dateRange = null; return; }
+  dateRange = `${m[3]}-${m[1]}-${m[2]}..${m[6]}-${m[4]}-${m[5]}`;
+  markChanged();
+});
+
+let hasResults = false;
+function markChanged() { if (hasResults) $('#updateButtonRow').classList.remove('d-none'); }
+document.querySelectorAll('.basicFilter, #group_selector').forEach(s => s.addEventListener('change', markChanged));
+
+function state() {
+  const sel = id => Array.from($(id).selectedOptions).map(o => o.value).join('|');
+  return {country, date: dateRange, carrier: sel('#carrier_filter'), coverage: sel('#coverage_filter'),
+          origin: sel('#origin_filter'), group: $('#group_selector').value, kpi: location.pathname};
+}
+
+function runQuery(view) {
+  if (!dateRange) { $('#errors_row').classList.remove('d-none'); $('#error_message').textContent = 'No date selected'; return; }
+  $('#updateButtonRow').classList.add('d-none');
+  $('#results').classList.add('d-none');
+  $('#loader').classList.remove('d-none');
+  setTimeout(() => {
+    const st = state();
+    const tbody = $('#tableProvinces tbody');
+    tbody.innerHTML = '';
+    const names = st.carrier ? st.carrier.split('|') : carriers[country];
+    for (const n of names) tbody.insertAdjacentHTML('beforeend', `<tr><td>${n}</td><td>${Math.round(Math.random()*100)}</td></tr>`);
+    $('#loader').classList.add('d-none');
+    $('#results').classList.remove('d-none');
+    hasResults = true;
+    window.lastQuery = {...st, view};
+  }, 1500);
+}
+let currentView = null;
+document.querySelectorAll('.chartModeSelector').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault(); currentView = a.id; runQuery(a.id);
+}));
+$('#updateButton').addEventListener('click', () => runQuery(currentView));
+
+$('#dlBtn').addEventListener('click', () => $('#dlMenu').classList.toggle('show'));
+document.querySelectorAll('#dlMenu a').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault();
+  $('#dlMenu').classList.remove('show');
+  const q = new URLSearchParams({...window.lastQuery, format: a.dataset.format});
+  const link = document.createElement('a');
+  link.href = '/export?' + q.toString();
+  document.body.appendChild(link); link.click(); link.remove();
+}));
+</script>
+</body>
+</html>

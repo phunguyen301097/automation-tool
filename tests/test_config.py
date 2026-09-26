@@ -1,0 +1,48 @@
+import datetime as dt
+
+import yaml
+
+from weplan_export.actions import parse_date
+from weplan_export.config import filter_scenarios, load_scenarios
+
+
+class FakeCtx:
+    class page:
+        @staticmethod
+        def evaluate(_):
+            return {"maxDate": "20260923", "minDate": "20250923"}
+
+
+def test_parse_date():
+    assert parse_date(FakeCtx, "2026-08-01") == dt.date(2026, 8, 1)
+    assert parse_date(FakeCtx, "01/08/2026") == dt.date(2026, 8, 1)
+    assert parse_date(FakeCtx, "max") == dt.date(2026, 9, 23)
+    assert parse_date(FakeCtx, "max-30d") == dt.date(2026, 8, 24)
+    assert parse_date(FakeCtx, "max-1m") == dt.date(2026, 8, 23)
+    assert parse_date(FakeCtx, "min+1w") == dt.date(2025, 9, 30)
+    assert parse_date(FakeCtx, dt.date(2026, 1, 1)) == dt.date(2026, 1, 1)
+
+
+def test_matrix_vars_before_after(tmp_path):
+    f = tmp_path / "s.yaml"
+    f.write_text(yaml.safe_dump({
+        "vars": {"fmt": "xlsx"},
+        "before": [{"goto": "/x"}],
+        "after": [{"screenshot": "end"}],
+        "scenarios": [
+            {"name": "a_${c}", "tags": ["t1"], "matrix": {"c": ["X", "Y"]},
+             "steps": [{"select_country": "${c}"}, {"download_table": {"format": "${fmt}", "filename": "${c}_${date_from}"}}]},
+            {"name": "skipped", "skip": True, "steps": []},
+            {"name": "plain", "matrix": {"n": [1, 2]}, "steps": []},
+        ],
+    }))
+    sc = load_scenarios([f])
+    assert [s.name for s in sc] == ["a_X", "a_Y", "plain[1]", "plain[2]"]
+    assert sc[1].steps == [
+        {"goto": "/x"},
+        {"select_country": "Y"},
+        {"download_table": {"format": "xlsx", "filename": "Y_${date_from}"}},
+        {"screenshot": "end"},
+    ]
+    assert [s.name for s in filter_scenarios(sc, ["a_*"], None)] == ["a_X", "a_Y"]
+    assert [s.name for s in filter_scenarios(sc, None, ["t1"])] == ["a_X", "a_Y"]

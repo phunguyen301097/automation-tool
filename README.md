@@ -1,0 +1,168 @@
+# weplan_export: tự động Download Table trên Weplan Analytics Dashboard
+
+Tool dùng **Python + Playwright** để điều khiển trình duyệt thật, chạy theo **kịch bản YAML** (giống automation test):
+
+```
+Vào menu  →  chọn quốc gia  →  chọn khoảng thời gian  →  chọn mạng / bộ lọc
+          →  chọn "Macro data"  →  chờ data load lên table
+          →  bấm "Download table" + chọn loại file  →  lưu file
+```
+
+Không cần source code của web: tool thao tác trực tiếp trên giao diện, dựa vào các `id` có sẵn trong HTML
+(`#dropdownCountryChooser`, `#datepicker`, `#carrier_filter`, `#byCountry`, `#results`, `#tableProvinces`...).
+
+## 1. Cài đặt
+
+Cần Python 3.10 trở lên.
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium   # hoặc bỏ qua và đặt browser.channel: chrome trong config.yaml
+```
+
+## 2. Đăng nhập (một lần)
+
+```bash
+python -m weplan_export login
+```
+
+Một cửa sổ trình duyệt sẽ mở ra. Bạn đăng nhập bình thường (có captcha hay 2FA cũng được). Khi thấy dashboard,
+quay lại terminal và nhấn **Enter**. Session được lưu vào `.auth/state.json` và các lần chạy sau sẽ dùng lại.
+Khi session hết hạn thì chạy lại lệnh này.
+
+> Nếu trang login chỉ có user/password thì có thể đặt biến môi trường `WEPLAN_USERNAME` / `WEPLAN_PASSWORD`,
+> tool sẽ tự đăng nhập khi session hết hạn (selector ô nhập nằm ở `auth:` trong `weplan_export/config.py`).
+
+## 3. Chạy
+
+```bash
+python -m weplan_export list                        # xem danh sách kịch bản
+python -m weplan_export run                         # chạy tất cả scenarios/*.yaml
+python -m weplan_export run scenarios/coverage_macro.yaml
+python -m weplan_export run -k "coverage_*"         # lọc theo tên (glob)
+python -m weplan_export run -t daily                # lọc theo tag
+python -m weplan_export run --headed --slow-mo 300  # xem trình duyệt chạy, chậm lại để quan sát
+python -m weplan_export run --trace                 # ghi Playwright trace để debug
+python -m weplan_export run --dry-run               # chỉ in các bước sau khi thay biến
+python -m weplan_export steps                       # danh sách các loại bước
+```
+
+File được lưu vào thư mục `downloads/` (đổi ở `output_dir`). Cuối mỗi lần chạy sẽ in bảng PASS/FAIL, còn
+`downloads/_runs/<thời gian>/report.json` chứa chi tiết. Nếu một kịch bản lỗi, tool chụp màn hình và lưu HTML
+của trang tại thời điểm lỗi vào cùng thư mục đó, rồi chạy tiếp các kịch bản còn lại (dùng `-x` để dừng ngay).
+Exit code là 1 nếu có kịch bản lỗi, nên có thể gắn vào cron hoặc Task Scheduler.
+
+## 4. Viết kịch bản
+
+```yaml
+vars:                     # biến dùng chung, gọi bằng ${ten}
+  from: max-30d
+  to: max
+
+scenarios:
+  - name: coverage_burundi_macro
+    tags: [daily]
+    steps:
+      - open_menu: ["Coverage time"]
+      - select_country: Burundi
+      - set_date: {from: "${from}", to: "${to}"}
+      - select_filter: {id: carrier_filter, options: [ECONET, LUMITEL]}
+      - choose_view: macro
+      - wait_for_table: {}
+      - download_table:
+          format: xlsx
+          filename: "coverage/${country}_${date_from}_${date_to}"
+
+  # matrix: sinh ra 1 lần chạy cho mỗi tổ hợp (ở đây là 2 x 2 = 4 file)
+  - name: coverage_${country}_${network}
+    matrix:
+      country: [Burundi, Cambodia]
+      network: [ECONET, LUMITEL]
+    steps: [...]
+```
+
+Mức file còn có `before:` và `after:`: các bước chèn vào đầu và cuối mọi scenario. Thêm `skip: true` để tạm
+bỏ qua một scenario.
+
+### Các bước chính
+
+| Bước | Ý nghĩa | Ví dụ |
+|---|---|---|
+| `open_menu` | Bấm menu sidebar (nhiều cấp) hoặc đi thẳng tới URL | `["Latency", "Latency Mobile (Cellular)"]`, `/app/bi/signal` |
+| `goto` | Mở một đường dẫn | `/app/bi/coverage` |
+| `select_country` | Chọn quốc gia theo tên hoặc mã | `Burundi`, `kh` |
+| `set_date` | Chọn khoảng thời gian | `{from: 2026-08-01, to: 2026-08-31}` |
+| `select_filter` | Chọn giá trị cho một ô select (theo `id`), nhận text hoặc value | `{id: carrier_filter, options: [ECONET]}` |
+| `filters` | Chọn nhiều bộ lọc cùng lúc | `{carrier_filter: [ECONET], coverage_filter: ["4G"]}` |
+| `choose_view` | Bấm thẻ visualization | `macro`, `admin_1`, `population_range`, `{text: "By provinces"}` |
+| `apply` | Bấm nút "Parameters changed. Click here to execute new query" nếu nó hiện | `{}` |
+| `wait_for_table` | Chờ `#results` hiện và table có dòng; báo lỗi nếu dashboard hiện lỗi | `{min_rows: 1, timeout: 300000}` |
+| `download_table` | Bấm "Download table", chọn loại file, lưu và kiểm tra file | `{format: xlsx}` / `{format: csv}` / `{format_text: "Excel"}` |
+| `click`, `fill`, `press`, `wait`, `wait_for`, `screenshot`, `js`, `pause` | Thao tác tự do | `click: {text: "Macro data"}` |
+
+**Ngày** nhận các dạng `2026-08-01`, `01/08/2026`, `today`, `today-7d`, `max` (ngày mới nhất có dữ liệu,
+lấy từ `window.dateLimits` của trang), `max-30d`, `max-1m`, `min`.
+
+**Tên file** có thể dùng các biến `${scenario}`, `${country}`, `${country_code}`, `${date_from}`, `${date_to}`,
+`${timestamp}`, `${rows}` và mọi biến trong `vars`/`matrix`. Dấu `/` tạo thư mục con. Phần đuôi file được lấy
+theo file server trả về.
+
+**Id các bộ lọc** (lấy từ HTML trang Coverage): `carrier_filter` (Cellular network), `coverage_filter`,
+`origin_filter`, `geography_filter`, `connection_filter`, `signal_filter`, `popRange_filter`, `location_status`,
+`clients_filter`, `screen_on_filter`, các bộ lọc Topology (`zone_filter`, `frequency_band_filter`, `vendor_filter`...),
+Device (`manufacturer_filter`, `brand_filter`, `model_filter`...), Wi‑Fi (`wifi_isp_filter`...), thời gian
+(`dayOfWeek_filter`, `hour_filter`), Grouping `group_selector`, X Axis `xaxis_selector`, Measurement type `macroMode`.
+
+## 5. Khi giao diện khác với dự kiến
+
+Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript chạy). Hai phần do JavaScript vẽ ra sau nên
+**cần xác nhận trên web thật ở lần chạy đầu**:
+
+1. **Ô chọn ngày** (`#datepicker`). Mặc định tool gõ `MM/DD/YYYY - MM/DD/YYYY` vào ô input. Log sẽ in
+   `WARNING: date input now shows ...` nếu trang không nhận định dạng đó. Khi đó:
+   - đổi `date.input_format` / `date.range_separator` trong `config.yaml`, hoặc
+   - dùng `date.mode: calendar` (bấm từng ngày trên lịch; selector của lịch nằm trong `date.calendar`), hoặc
+   - nếu có nút preset: `set_date: {preset: "Last 30 days"}`.
+2. **Nút "Download table" và menu chọn loại file**. Tool tìm nút có chữ `Download table` trong `#tableProvinces`.
+   Sau khi bấm, nếu hiện menu thì chọn mục khớp `Excel|xlsx` hoặc `CSV`, còn nếu trình duyệt tải về ngay thì
+   dùng luôn file đó. Nếu chữ trên web khác thì chỉnh `download_button_text`, hoặc `format_text` trong bước
+   `download_table`.
+
+Cách tìm selector đúng trên web thật:
+
+```bash
+python -m weplan_export run -k tên_kịch_bản --headed   # thêm bước `- pause: {}` vào chỗ cần xem
+python -m playwright codegen --load-storage .auth/state.json https://dashboard.weplananalytics.com/app/bi/coverage
+```
+
+`codegen` ghi lại các thao tác bạn click và in ra selector tương ứng. Selector đó dùng được ngay trong các bước
+`click: {selector: "..."}`, hoặc bạn có thể sửa `selectors:` trong `config.yaml`.
+
+Các ô chọn (bootstrap-select) mặc định được đặt giá trị qua JavaScript rồi phát sự kiện `change`, vì cách này ổn
+định hơn. Nếu trang không nhận thay đổi, thêm `mode: ui` để tool bấm chọn như người dùng:
+`select_filter: {id: carrier_filter, options: [ECONET], mode: ui}`.
+
+## 6. Kiểm thử
+
+`tests/mock_site/index.html` mô phỏng cấu trúc DOM của dashboard (menu nhiều cấp, đổi quốc gia, date, filter
+tải bất đồng bộ, thẻ Macro data, table load chậm, nút Download table có menu Excel/CSV). Các test chạy toàn bộ
+luồng trên trang mô phỏng này:
+
+```bash
+python -m pytest -q
+```
+
+## Cấu trúc
+
+```
+config.yaml                 cấu hình (URL, timeout, selector, định dạng ngày)
+scenarios/*.yaml            kịch bản
+weplan_export/
+  cli.py                    lệnh login / run / list / steps
+  config.py                 đọc config, kịch bản, vars, matrix
+  actions.py                các bước (menu, country, date, filter, view, wait, download...)
+  runner.py                 mở trình duyệt, chạy kịch bản, báo cáo
+tests/                      test với trang mô phỏng
+```

@@ -1,0 +1,40 @@
+# Kịch bản mẫu: Coverage time -> chọn thời gian, mạng, quốc gia -> Macro data
+# -> chờ table -> chọn loại file -> Download table.
+#
+# Biến dùng chung cho cả file; dùng lại bằng ${ten_bien}.
+vars:
+  from: max-30d          # 30 ngày tính tới ngày mới nhất có dữ liệu (window.dateLimits.maxDate)
+  to: max
+  format: xlsx
+
+scenarios:
+  - name: coverage_burundi_macro_all_networks
+    tags: [daily, coverage]
+    steps:
+      - open_menu: ["Coverage time"]
+      - select_country: Burundi
+      - set_date: {from: "${from}", to: "${to}"}
+      - select_filter: {id: carrier_filter, options: [ECONET, LUMITEL, ONAMOB]}
+      - choose_view: macro                    # = click thẻ "Macro data" (#byCountry)
+      - wait_for_table: {}
+      - download_table:
+          format: "${format}"
+          filename: "coverage/${country}_${date_from}_${date_to}_all"
+
+  # Một kịch bản -> nhiều lần chạy: mỗi tổ hợp trong matrix là 1 lần chạy.
+  - name: coverage_${country}_${network}
+    tags: [coverage]
+    matrix:
+      country: [Burundi]
+      network: [ECONET, LUMITEL]
+    steps:
+      - open_menu: ["Coverage time"]
+      - select_country: "${country}"
+      - set_date: {from: "${from}", to: "${to}"}
+      - select_filter: {id: carrier_filter, options: ["${network}"]}
+      - select_filter: {id: coverage_filter, options: ["4G"]}
+      - choose_view: macro
+      - wait_for_table: {}
+      - download_table:
+          format: "${format}"
+          filename: "coverage/${country}_${network}_${date_from}_${date_to}"
