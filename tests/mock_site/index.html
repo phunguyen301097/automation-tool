@@ -98,7 +98,24 @@ $('#dropdownCountryChooser').addEventListener('change', e => {
 });
 
 let dateRange = null;
-$('#datepicker input').addEventListener('keydown', e => {
+// ?dp=popup: widget is plain text; clicking opens a popup with start/end inputs.
+// ?dp=none : widget is plain text and nothing usable opens.
+const dpMode = params.get('dp');
+if (dpMode) {
+  $('#datepicker').innerHTML = '<div class="reportrange-text">Aug 1, 2026 - Aug 31, 2026</div>';
+  if (dpMode === 'popup') $('#datepicker div').addEventListener('click', () => {
+    if ($('.daterangepicker')) return;
+    document.body.insertAdjacentHTML('beforeend',
+      '<div class="daterangepicker"><input name="start"><input name="end"></div>');
+    const iso = v => { const m = v.match(/^(\d\d)\/(\d\d)\/(\d{4})$/); return m ? `${m[3]}-${m[1]}-${m[2]}` : null; };
+    $('.daterangepicker input[name=end]').addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const a = iso($('.daterangepicker input[name=start]').value), b = iso(e.target.value);
+      if (a && b) { dateRange = `${a}..${b}`; markChanged(); }
+    });
+  });
+}
+if (!dpMode) $('#datepicker input').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const m = e.target.value.match(/^(\d\d)\/(\d\d)\/(\d{4}) - (\d\d)\/(\d\d)\/(\d{4})$/);
   if (!m) { e.target.value = ''; dateRange = null; return; }

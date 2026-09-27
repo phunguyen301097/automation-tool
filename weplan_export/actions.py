@@ -328,15 +328,18 @@ def filters(ctx: Context, args: dict) -> None:
 
 @step("set_date", "date")
 def set_date(ctx: Context, args: dict) -> None:
-    """args: {from: 2026-08-01, to: 2026-08-31, mode: input|calendar|preset, preset: "Last 30 days"}"""
+    """args: {from: 2026-08-01, to: 2026-08-31, mode: input|calendar|preset|skip, preset: "Last 30 days"}"""
     dcfg = {**ctx.config["date"], **{k: v for k, v in args.items() if k in ("mode", "input_format", "range_separator")}}
     page = ctx.page
     mode = args.get("mode") or ("preset" if args.get("preset") else dcfg["mode"])
+    if mode == "skip":
+        ctx.log("  date: skipped, using the dashboard's current range")
+        return
     page.wait_for_selector(ctx.sel["datepicker"], state="attached", timeout=ctx.timeouts["default"])
 
     if mode == "preset":
         ctx.log(f"  date preset -> {args['preset']}")
-        page.locator(ctx.sel["datepicker_input"]).first.click()
+        _open_datepicker(ctx)
         page.get_by_text(_text_regex(args["preset"], exact=True)).first.click()
         return
 
@@ -352,26 +355,30 @@ def set_date(ctx: Context, args: dict) -> None:
     ctx.vars["date_from"] = d_from.isoformat()
     ctx.vars["date_to"] = d_to.isoformat()
 
-    inp = page.locator(ctx.sel["datepicker_input"]).first
     if mode == "input":
         fmt = dcfg["input_format"]
-        text = d_from.strftime(fmt) + dcfg["range_separator"] + d_to.strftime(fmt)
-        ctx.log(f"  date -> '{text}'")
-        inp.click()
-        inp.press("Control+A")
-        inp.press("Delete")
-        inp.type(text, delay=20)
-        inp.press("Enter")
+        inputs = _find_date_inputs(ctx)
+        if len(inputs) >= 2:
+            # Separate start / end inputs.
+            ctx.log(f"  date -> start '{d_from.strftime(fmt)}', end '{d_to.strftime(fmt)}'")
+            _type_into(inputs[0], d_from.strftime(fmt))
+            _type_into(inputs[1], d_to.strftime(fmt))
+        else:
+            text = d_from.strftime(fmt) + dcfg["range_separator"] + d_to.strftime(fmt)
+            ctx.log(f"  date -> '{text}'")
+            _type_into(inputs[0], text)
+            value = inputs[0].input_value()
+            if value.replace(" ", "") != text.replace(" ", ""):
+                ctx.log(f"  WARNING: date input now shows '{value}' (expected '{text}'). "
+                        "Check date.input_format in config.yaml or use mode: calendar")
+        if dcfg["calendar"].get("apply"):
+            _click_if_visible(page.locator(dcfg["calendar"]["apply"]).first)
         page.keyboard.press("Escape")
         page.wait_for_timeout(300)
-        value = inp.input_value()
-        if value.replace(" ", "") != text.replace(" ", ""):
-            ctx.log(f"  WARNING: date input now shows '{value}' (expected '{text}'). "
-                    "Check date.input_format in config.yaml or use mode: calendar")
     elif mode == "calendar":
         cal = dcfg["calendar"]
         ctx.log(f"  date (calendar) -> {d_from} .. {d_to}")
-        inp.click()
+        _open_datepicker(ctx)
         for d in (d_from, d_to):
             _calendar_pick(ctx, cal, d)
         if cal.get("apply"):
@@ -379,6 +386,96 @@ def set_date(ctx: Context, args: dict) -> None:
         page.keyboard.press("Escape")
     else:
         raise StepError(f"Unknown date mode '{mode}'")
+
+
+def _visible(loc) -> list:
+    out = []
+    for i in range(loc.count()):
+        try:
+            if loc.nth(i).is_visible():
+                out.append(loc.nth(i))
+        except Exception:
+            pass
+    return out
+
+
+def _click_if_visible(loc) -> None:
+    try:
+        if loc.count() and loc.is_visible():
+            loc.click()
+    except Exception:
+        pass
+
+
+def _type_into(inp, text: str) -> None:
+    inp.click()
+    inp.press("Control+A")
+    inp.press("Delete")
+    inp.type(text, delay=20)
+    inp.press("Enter")
+
+
+def _open_datepicker(ctx: Context) -> None:
+    """Click whatever the date widget renders (input, button or text)."""
+    page = ctx.page
+    inside = _visible(page.locator(ctx.sel["datepicker_input"]))
+    if inside:
+        inside[0].click()
+    else:
+        root = page.locator(ctx.sel["datepicker"]).first
+        clickable = _visible(root.locator("input, button, [role=button], [tabindex], .form-control, div, span"))
+        (clickable[0] if clickable else root).click()
+    page.wait_for_timeout(800)
+
+
+def _find_date_inputs(ctx: Context) -> list:
+    """Visible date inputs: inside #datepicker, or in the popup opened by clicking it."""
+    page = ctx.page
+    try:
+        page.locator(ctx.sel["datepicker_input"]).first.wait_for(state="visible", timeout=5_000)
+    except PWTimeout:
+        pass
+    inputs = _visible(page.locator(ctx.sel["datepicker_input"]))
+    if inputs:
+        return inputs
+    ctx.log("  no <input> inside the date widget -> clicking it to open the picker")
+    _open_datepicker(ctx)
+    inputs = _visible(page.locator(ctx.config["date"]["popup_inputs"]))
+    if inputs:
+        return inputs
+    path = _dump_datepicker(ctx)
+    raise StepError(
+        "Could not find a date input. The date widget's HTML was saved to "
+        f"{path}. Send that file to adjust selectors, or use `date.mode: calendar` "
+        "/ `set_date: {mode: skip}` to keep the dashboard's default range."
+    )
+
+
+def _dump_datepicker(ctx: Context) -> Path:
+    page = ctx.page
+    html = page.evaluate(
+        """(sel) => {
+            const parts = [];
+            const root = document.querySelector(sel);
+            parts.push('<!-- ' + sel + ' -->\\n' + (root ? root.outerHTML : 'NOT FOUND'));
+            // Popups are often appended to <body>; keep the visible, recently shown ones.
+            for (const el of document.body.children) {
+                const r = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+                    && /picker|calendar|popover|dropdown|dialog|overlay|menu/i.test(el.className + ' ' + el.id)) {
+                    parts.push('<!-- body > ' + el.tagName + '.' + el.className + ' -->\\n' + el.outerHTML);
+                }
+            }
+            return parts.join('\\n\\n');
+        }""",
+        ctx.sel["datepicker"],
+    )
+    path = ctx.output_dir / "_debug" / f"datepicker_{_safe(ctx.scenario.name)}.html"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html, encoding="utf-8")
+    ctx.page.screenshot(path=str(path.with_suffix(".png")), full_page=True)
+    return path
 
 
 def _calendar_pick(ctx: Context, cal: dict, d: dt.date) -> None:

@@ -4,3 +4,7 @@ __pycache__/
 .auth/
 downloads/
 .pytest_cache/
+bin/
+obj/
+publish/
+TestResults/

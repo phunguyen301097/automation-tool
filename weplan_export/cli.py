@@ -26,6 +26,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("login", help="open a browser, log in manually and save the session")
 
+    ins = sub.add_parser("inspect", help="save the rendered HTML of the date widget and result table")
+    ins.add_argument("--headed", action="store_true")
+    ins.add_argument("--view", default="macro", help="visualization to open (default: macro)")
+
     r = sub.add_parser("run", help="run scenarios")
     r.add_argument("files", nargs="*", help="scenario YAML files (default: scenarios/*.yaml)")
     r.add_argument("-k", "--only", action="append", help="run only scenarios whose name matches (glob, repeatable)")
@@ -47,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "login":
         from .runner import interactive_login
         interactive_login(config)
+        return 0
+
+    if args.cmd == "inspect":
+        from .runner import inspect_page
+        inspect_page(config, headed=args.headed, view=args.view)
         return 0
 
     if args.cmd == "steps":

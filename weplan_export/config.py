@@ -61,6 +61,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mode": "input",
         "input_format": "%m/%d/%Y",
         "range_separator": " - ",
+        # Inputs looked for in the popup when #datepicker itself has no <input>.
+        "popup_inputs": ".daterangepicker input, .p-datepicker input, .dp__menu input, .mx-datepicker-main input, "
+                        ".vc-popover-content input, .flatpickr-calendar input, [role=dialog] input, .dropdown-menu.show input",
         "calendar": {
             "title": ".p-datepicker-title, .p-datepicker-header",
             "prev": ".p-datepicker-prev, .p-datepicker-prev-button",

@@ -163,3 +163,53 @@ def test_dashboard_error_fails_fast(tmp_path, config):
     r = _run(tmp_path, config, doc)[0]
     assert not r.ok
     assert "No date selected" in r.error
+
+
+def test_date_widget_without_input_uses_popup_inputs(tmp_path, config):
+    doc = {"scenarios": [{
+        "name": "popup_date",
+        "steps": [
+            {"goto": "/app/bi/coverage?dp=popup"},
+            {"set_date": {"from": "2026-08-01", "to": "2026-08-31"}},
+            {"choose_view": "macro"},
+            {"wait_for_table": {}},
+            {"download_table": {"format": "csv"}},
+        ],
+    }]}
+    r = _run(tmp_path, config, doc)[0]
+    assert r.ok, r.error
+    content = dict(csv.reader(Path(r.downloads[0]["file"]).read_text().splitlines()[1:]))
+    assert content["date"] == "2026-08-01..2026-08-31"
+
+
+def test_unknown_date_widget_dumps_html_and_skip_mode_works(tmp_path, config):
+    doc = {"scenarios": [
+        {"name": "unknown_date", "steps": [
+            {"goto": "/app/bi/coverage?dp=none"},
+            {"set_date": {"from": "2026-08-01", "to": "2026-08-31"}},
+        ]},
+    ]}
+    r = _run(tmp_path, config, doc)[0]
+    assert not r.ok
+    dump = Path(config["output_dir"]) / "_debug" / "datepicker_unknown_date.html"
+    assert str(dump) in r.error
+    assert "reportrange-text" in dump.read_text()
+
+
+def test_login_style_manual_download_is_kept(tmp_path, config, server):
+    from playwright.sync_api import sync_playwright
+    from weplan_export.runner import _keep_manual_downloads, launch_browser, new_context
+
+    with sync_playwright() as pw:
+        browser = launch_browser(pw, config)
+        ctx = new_context(browser, config, use_state=False)
+        _keep_manual_downloads(ctx, config)
+        page = ctx.new_page()
+        with page.expect_download() as dl:
+            page.goto(server + "/app/bi/coverage")
+            page.evaluate("u => { const a = document.createElement('a'); a.href = u; document.body.appendChild(a); a.click(); }",
+                          server + "/export?format=csv&x=1")
+        dl.value.path()  # wait until finished
+        page.wait_for_timeout(500)
+        browser.close()
+    assert (Path(config["output_dir"]) / "manual" / "table_export.csv").exists()

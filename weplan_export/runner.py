@@ -108,6 +108,7 @@ def interactive_login(config: dict) -> None:
     with sync_playwright() as pw:
         browser = launch_browser(pw, config, headed=True)
         ctx = new_context(browser, config, use_state=False)
+        _keep_manual_downloads(ctx, config)
         page = ctx.new_page()
         page.goto(config["base_url"], wait_until="domcontentloaded")
         log("Log in in the opened browser window, wait until the dashboard is shown,")
@@ -116,6 +117,90 @@ def interactive_login(config: dict) -> None:
         ctx.storage_state(path=str(state))
         log(f"Session saved to {state}")
         browser.close()
+
+
+def _keep_manual_downloads(ctx: BrowserContext, config: dict) -> None:
+    """Playwright stores downloads under a temp GUID name and deletes them when the
+    browser closes. Save files downloaded by hand in a tool-opened window instead."""
+    target = Path(config["output_dir"]) / "manual"
+
+    def on_page(page):
+        def on_download(download):
+            target.mkdir(parents=True, exist_ok=True)
+            path = target / download.suggested_filename
+            download.save_as(str(path))
+            log(f"Saved manual download -> {path}")
+        page.on("download", on_download)
+
+    for p in ctx.pages:
+        on_page(p)
+    ctx.on("page", on_page)
+
+
+def inspect_page(config: dict, headed: bool = False, view: str = "macro") -> Path:
+    """Dump the rendered DOM of the date widget and the result table to help tune selectors."""
+    from .actions import STEPS, Context
+    from .config import Scenario
+
+    out = Path(config["output_dir"]) / "_inspect" / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out.mkdir(parents=True, exist_ok=True)
+    sel = config["selectors"]
+
+    def dump(page, name: str, css: str | None = None) -> None:
+        if css:
+            html = page.evaluate(
+                "(s) => Array.from(document.querySelectorAll(s)).map(e => e.outerHTML).join('\\n\\n') || 'NOT FOUND'", css)
+        else:
+            html = page.content()
+        (out / f"{name}.html").write_text(html, encoding="utf-8")
+        page.screenshot(path=str(out / f"{name}.png"), full_page=True)
+        log(f"  wrote {out / name}.html/.png")
+
+    with sync_playwright() as pw:
+        browser = launch_browser(pw, config, headed=headed)
+        ctx = new_context(browser, config)
+        _keep_manual_downloads(ctx, config)
+        page = ctx.new_page()
+        if config["auth"].get("required", True):
+            _ensure_session(page, config)
+        else:
+            page.goto(config["base_url"].rstrip("/") + config["start_path"])
+        try:
+            page.wait_for_load_state("networkidle", timeout=20_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(3000)
+        dump(page, "1_page")
+        dump(page, "2_datepicker", sel["datepicker"])
+        # Open the date widget and capture whatever popup appears.
+        try:
+            root = page.locator(sel["datepicker"]).first
+            clickable = root.locator("input, button, [role=button], .form-control, div, span")
+            (clickable.first if clickable.count() else root).click()
+            page.wait_for_timeout(1500)
+            dump(page, "3_page_datepicker_open")
+            page.keyboard.press("Escape")
+        except Exception as e:
+            log(f"  could not open date widget: {e}")
+        # Load the result table and capture the area around "Download table".
+        try:
+            sctx = Context(page, config, Scenario(name="inspect", steps=[]), out, log)
+            STEPS["choose_view"](sctx, view)
+            STEPS["wait_for_table"](sctx, {})
+            dump(page, "4_results", sel["results"])
+            btn = page.locator("button, a, [role=button]").filter(has_text=sel["download_button_text"]).first
+            if btn.count():
+                btn.click()
+                page.wait_for_timeout(1500)
+                dump(page, "5_download_menu_open")
+            else:
+                log(f"  button '{sel['download_button_text']}' not found")
+        except Exception as e:
+            log(f"  could not load results: {e}")
+            dump(page, "4_page_error")
+        browser.close()
+    log(f"Done. Send the folder {out} (zip) to adjust selectors.")
+    return out
 
 
 def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None = None,

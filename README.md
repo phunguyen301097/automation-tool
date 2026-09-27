@@ -130,6 +130,23 @@ Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript c
    dùng luôn file đó. Nếu chữ trên web khác thì chỉnh `download_button_text`, hoặc `format_text` trong bước
    `download_table`.
 
+**Lệnh `inspect`**: mở dashboard bằng session đã lưu, rồi ghi HTML (đã render) và ảnh chụp của: toàn trang,
+ô chọn ngày, trang sau khi mở ô ngày, vùng kết quả sau khi bấm Macro data, và menu sau khi bấm "Download table":
+
+```bash
+python -m weplan_export inspect            # thêm --headed để xem trình duyệt
+```
+
+Kết quả nằm ở `downloads/_inspect/<thời gian>/`. Nén thư mục đó gửi lại là đủ để chỉnh selector.
+
+Nếu ô ngày không có `<input>`, bước `set_date` tự bấm vào ô để mở popup và tìm ô nhập trong đó (hỗ trợ cả 2 ô
+bắt đầu/kết thúc riêng). Nếu vẫn không tìm được, HTML của ô ngày được lưu vào `downloads/_debug/`. Trong lúc
+chờ chỉnh, có thể dùng `set_date: {mode: skip}` để giữ khoảng ngày mặc định của dashboard.
+
+**File tải tay trong cửa sổ do tool mở**: Playwright lưu file tải về dưới tên dạng GUID trong thư mục tạm và xóa
+khi đóng trình duyệt. Trong lệnh `login` và `inspect`, file bạn tự bấm tải sẽ được lưu lại vào
+`downloads/manual/` với tên gốc. Khi chạy `run`, file được lưu theo `filename` của bước `download_table`.
+
 Cách tìm selector đúng trên web thật:
 
 ```bash
