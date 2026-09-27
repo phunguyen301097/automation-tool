@@ -1,0 +1,615 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using ClosedXML.Excel;
+using Microsoft.Playwright;
+
+namespace WeplanExport;
+
+public class StepContext(IPage page, AppConfig config, Scenario scenario, string outputDir, Action<string> log)
+{
+    public IPage Page { get; } = page;
+    public AppConfig Config { get; } = config;
+    public Scenario Scenario { get; } = scenario;
+    public string OutputDir { get; } = outputDir;
+    public Action<string> Log { get; } = log;
+    public Dictionary<string, object?> Vars { get; } = new(scenario.Vars);
+    public List<DownloadInfo> Downloads { get; } = new();
+    public SelectorConfig Sel => Config.Selectors;
+    public TimeoutConfig Timeouts => Config.Timeouts;
+}
+
+public record DownloadInfo(string File, long Bytes, string Suggested, int DataRows);
+
+/// <summary>All scenario step types. Each step receives the context and the raw YAML argument.</summary>
+public static class Steps
+{
+    public delegate Task StepFn(StepContext ctx, object? args);
+
+    public record StepDef(StepFn Run, string Help);
+
+    public static readonly Dictionary<string, StepDef> Registry = new();
+
+    static Steps()
+    {
+        Register(GotoAsync, "Open a path or URL: /app/bi/coverage", "goto");
+        Register(OpenMenuAsync, "Navigate the sidebar: \"Coverage time\" | [\"Latency\", \"Latency Mobile (Cellular)\"] | /app/bi/signal", "open_menu", "menu");
+        Register(SelectCountryAsync, "Select country by name (Cambodia) or code (kh)", "select_country", "country");
+        Register(SelectFilterAsync, "{id: carrier_filter, options: [ECONET], clear: true, mode: js|ui}", "select_filter", "select", "filter");
+        Register(FiltersAsync, "Several filters at once: {carrier_filter: [ECONET], coverage_filter: [\"4G\"]}", "filters");
+        Register(SetDateAsync, "{from: 2026-08-01, to: 2026-08-31, mode: input|calendar|preset, preset: \"Last 30 days\"}", "set_date", "date");
+        Register(ApplyAsync, "Click \"Parameters changed...\" if it is visible", "apply", "run_query");
+        Register(ChooseViewAsync, "Click a visualization card: macro | population_range | admin_1 | '#byCountry' | {text: 'Macro data'}", "choose_view", "view");
+        Register(WaitForTableAsync, "Wait until results are shown and the table has rows: {min_rows: 1, timeout: 300000}", "wait_for_table", "wait_data");
+        Register(DownloadTableAsync, "Click \"Download table\", pick file type, save: {format: xlsx, filename: \"${country}_${date_from}\"}", "download_table", "download");
+        Register(ClickAsync, "\"#css\" | {selector: .x} | {text: \"Macro data\"} | {role: button, name: OK}", "click");
+        Register(FillAsync, "{selector: \"#x\", value: abc}", "fill");
+        Register(PressAsync, "Press a key: Escape", "press");
+        Register(WaitAsync, "Wait N milliseconds", "wait");
+        Register(WaitForAsync, "Wait for a selector: \"#results\" | {selector, state: visible|hidden|attached}", "wait_for");
+        Register(ScreenshotAsync, "Full-page screenshot into downloads/screenshots", "screenshot");
+        Register(EvaluateAsync, "Run JavaScript on the page", "js", "evaluate");
+        Register(PauseAsync, "Open Playwright Inspector (needs --headed)", "pause");
+        Register(SetVarAsync, "Set variables: {name: value}", "set_var");
+    }
+
+    private static void Register(StepFn fn, string help, params string[] names)
+    {
+        foreach (var n in names) Registry[n] = new StepDef(fn, help);
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private static string Url(StepContext ctx, string path) =>
+        Regex.IsMatch(path, "^(https?|file):", RegexOptions.IgnoreCase)
+            ? path
+            : ctx.Config.BaseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
+
+    private static async Task WaitPageReadyAsync(StepContext ctx)
+    {
+        await ctx.Page.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new() { Timeout = ctx.Timeouts.Navigation });
+        try
+        {
+            await ctx.Page.WaitForLoadStateAsync(LoadState.NetworkIdle, new() { Timeout = 15_000 });
+        }
+        catch (TimeoutException)
+        {
+            // Dashboards may keep long-polling; not fatal.
+        }
+    }
+
+    public static Regex TextRegex(string text, bool exact = false) =>
+        new(exact ? $@"^\s*{Regex.Escape(text.Trim())}\s*$" : Regex.Escape(text.Trim()), RegexOptions.IgnoreCase);
+
+    private static async Task<bool> ClickUpdateIfVisibleAsync(StepContext ctx)
+    {
+        var btn = ctx.Page.Locator(ctx.Sel.UpdateButton).First;
+        if (await btn.CountAsync() > 0 && await btn.IsVisibleAsync())
+        {
+            ctx.Log("  'Parameters changed' button visible -> clicking it");
+            await btn.ClickAsync();
+            return true;
+        }
+        return false;
+    }
+
+    private static async Task CheckErrorAsync(StepContext ctx)
+    {
+        var err = ctx.Page.Locator(ctx.Sel.ErrorMessage).First;
+        if (await err.CountAsync() > 0 && await err.IsVisibleAsync())
+        {
+            var text = (await err.InnerTextAsync()).Trim();
+            if (text.Length > 0) throw new StepException($"Dashboard shows an error: {text}");
+        }
+    }
+
+    private static string Safe(string s) => Regex.Replace(s, @"[^\w.\-]+", "_").Trim('_');
+
+    // ------------------------------------------------------------------ navigation
+
+    public static async Task GotoAsync(StepContext ctx, object? args)
+    {
+        var path = Args.Map(args, "url").Get("url") ?? throw new StepException("goto needs a path");
+        ctx.Log($"  goto {Url(ctx, path)}");
+        await ctx.Page.GotoAsync(Url(ctx, path), new() { Timeout = ctx.Timeouts.Navigation, WaitUntil = WaitUntilState.DOMContentLoaded });
+        await WaitPageReadyAsync(ctx);
+    }
+
+    public static async Task OpenMenuAsync(StepContext ctx, object? args)
+    {
+        var items = Args.StrList(args);
+        if (items.Count == 1 && items[0].StartsWith('/'))
+        {
+            await GotoAsync(ctx, items[0]);
+            return;
+        }
+        var page = ctx.Page;
+        ILocator scope = page.Locator(ctx.Sel.Sidebar).First;
+        for (var i = 0; i < items.Count; i++)
+        {
+            var last = i == items.Count - 1;
+            var link = scope.Locator("a").Filter(new() { HasTextRegex = TextRegex(items[i], exact: true) }).First;
+            if (await link.CountAsync() == 0) throw new StepException($"Menu item '{items[i]}' not found in sidebar");
+            var href = await link.GetAttributeAsync("href") ?? "#";
+            ctx.Log($"  menu -> {items[i]}" + (href == "#" ? "" : $" ({href})"));
+            if (last && href is not ("#" or ""))
+            {
+                var navigated = new TaskCompletionSource();
+                void OnNav(object? _, IFrame f)
+                {
+                    if (f == page.MainFrame) navigated.TrySetResult();
+                }
+                page.FrameNavigated += OnNav;
+                try
+                {
+                    await link.ClickAsync();
+                    await navigated.Task.WaitAsync(TimeSpan.FromMilliseconds(ctx.Timeouts.Navigation));
+                }
+                catch (TimeoutException)
+                {
+                    throw new StepException($"Clicking menu '{items[i]}' did not navigate to {href}");
+                }
+                finally
+                {
+                    page.FrameNavigated -= OnNav;
+                }
+                await WaitPageReadyAsync(ctx);
+            }
+            else
+            {
+                await link.ClickAsync();
+                await page.WaitForTimeoutAsync(400); // metisMenu expand animation
+                scope = link.Locator("xpath=.."); // next level lives inside this item's submenu
+            }
+        }
+    }
+
+    public static async Task SelectCountryAsync(StepContext ctx, object? args)
+    {
+        var wanted = Args.Map(args, "name").Get("name") ?? throw new StepException("select_country needs a name");
+        var page = ctx.Page;
+        var sel = ctx.Sel.CountrySelect;
+        await page.WaitForSelectorAsync(sel, new() { State = WaitForSelectorState.Attached, Timeout = ctx.Timeouts.Default });
+        var info = await page.EvaluateAsync<JsonElement>(@"([sel, wanted]) => {
+            const el = document.querySelector(sel);
+            const opts = Array.from(el.options);
+            const w = String(wanted).trim().toLowerCase();
+            const o = opts.find(o => o.value.toLowerCase() === w || o.text.trim().toLowerCase() === w);
+            return {current: el.value, match: o ? o.value : null, label: o ? o.text.trim() : null,
+                    available: opts.map(o => o.text.trim())};
+        }", new object[] { sel, wanted });
+        var match = info.GetProperty("match").GetString();
+        if (match is null)
+            throw new StepException($"Country '{wanted}' not available. Options: {info.GetProperty("available")}");
+        var label = info.GetProperty("label").GetString();
+        ctx.Vars["country"] = label;
+        ctx.Vars["country_code"] = match;
+        if (info.GetProperty("current").GetString() == match)
+        {
+            ctx.Log($"  country already {label}");
+            return;
+        }
+        ctx.Log($"  country -> {label}");
+        var urlBefore = page.Url;
+        await SetSelectValuesAsync(ctx, sel, new() { match }, clear: true, waitOptionsMs: null);
+        // Switching country usually reloads the dashboard.
+        try
+        {
+            await page.WaitForURLAsync(u => u != urlBefore, new() { Timeout = 10_000 });
+        }
+        catch (TimeoutException)
+        {
+        }
+        await WaitPageReadyAsync(ctx);
+    }
+
+    // ------------------------------------------------------------------ filters
+
+    private const string SetSelectJs = @"([sel, wanted, clear]) => {
+        const el = document.querySelector(sel);
+        if (!el) return {error: 'not found'};
+        const opts = Array.from(el.options);
+        const norm = s => String(s).trim().toLowerCase();
+        const want = wanted.map(norm);
+        const hit = o => want.includes(norm(o.value)) || want.includes(norm(o.text));
+        const missing = wanted.filter(w => !opts.some(o => norm(o.value) === norm(w) || norm(o.text) === norm(w)));
+        if (missing.length) return {missing, available: opts.map(o => o.text.trim())};
+        if (el.multiple) {
+            opts.forEach(o => { if (hit(o)) o.selected = true; else if (clear) o.selected = false; });
+        } else {
+            const o = opts.find(hit); if (o) el.value = o.value;
+        }
+        const $ = window.jQuery;
+        if ($ && $.fn && $.fn.selectpicker) { try { $(el).selectpicker('refresh'); } catch (e) {} }
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+        if ($) { try { $(el).trigger('changed.bs.select'); } catch (e) {} }
+        return {selected: opts.filter(o => o.selected).map(o => o.text.trim())};
+    }";
+
+    private static async Task<List<string>> SetSelectValuesAsync(StepContext ctx, string css, List<string> values, bool clear, int? waitOptionsMs)
+    {
+        var sw = Stopwatch.StartNew();
+        var limit = waitOptionsMs ?? ctx.Timeouts.Default;
+        while (true)
+        {
+            var res = await ctx.Page.EvaluateAsync<JsonElement>(SetSelectJs, new object[] { css, values, clear });
+            if (res.TryGetProperty("error", out _)) throw new StepException($"Select '{css}' not found");
+            if (!res.TryGetProperty("missing", out var missing))
+                return res.GetProperty("selected").EnumerateArray().Select(e => e.GetString()!).ToList();
+            // Options are often loaded asynchronously (e.g. geography); retry until timeout.
+            if (sw.ElapsedMilliseconds > limit)
+            {
+                var available = res.GetProperty("available").EnumerateArray().Take(50).Select(e => e.GetString());
+                throw new StepException($"Options {missing} not found in '{css}'. Available: [{string.Join(", ", available)}]");
+            }
+            await ctx.Page.WaitForTimeoutAsync(500);
+        }
+    }
+
+    /// <summary>Drive bootstrap-select through clicks, like a user would.</summary>
+    private static async Task<List<string>> SelectUiAsync(StepContext ctx, string css, List<string> values, bool clear)
+    {
+        var page = ctx.Page;
+        var wrapper = page.Locator($".bootstrap-select:has({css})").First;
+        await wrapper.Locator(".dropdown-toggle").First.ClickAsync();
+        var menu = wrapper.Locator(".dropdown-menu").First;
+        await menu.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = ctx.Timeouts.Default });
+        var deselect = menu.Locator(".bs-deselect-all").First;
+        if (clear && await deselect.CountAsync() > 0 && await deselect.IsVisibleAsync()) await deselect.ClickAsync();
+        var search = menu.Locator(".bs-searchbox input").First;
+        foreach (var v in values)
+        {
+            var hasSearch = await search.CountAsync() > 0 && await search.IsVisibleAsync();
+            if (hasSearch) await search.FillAsync(v);
+            await menu.Locator("li a, li .dropdown-item").Filter(new() { HasTextRegex = TextRegex(v, exact: true) }).First.ClickAsync();
+            if (hasSearch) await search.FillAsync("");
+        }
+        await page.Keyboard.PressAsync("Escape");
+        return (await page.EvaluateAsync<string[]>(
+            "(sel) => Array.from(document.querySelector(sel).selectedOptions).map(o => o.text.trim())", css)).ToList();
+    }
+
+    public static async Task SelectFilterAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "id");
+        var css = a.Get("selector") ?? "#" + (a.Get("id") ?? throw new StepException("select_filter needs id or selector"));
+        var values = Args.StrList(a.GetValueOrDefault("options") ?? a.GetValueOrDefault("value"));
+        var clear = a.GetBool("clear", true);
+        await ctx.Page.WaitForSelectorAsync(css, new() { State = WaitForSelectorState.Attached, Timeout = ctx.Timeouts.Default });
+        if (values.Count == 0)
+        {
+            ctx.Log($"  clear {css}");
+            await ctx.Page.EvaluateAsync(@"(sel) => { const el = document.querySelector(sel);
+                Array.from(el.options).forEach(o => o.selected = false);
+                const $ = window.jQuery; if ($ && $.fn && $.fn.selectpicker) { try { $(el).selectpicker('refresh'); } catch (e) {} }
+                el.dispatchEvent(new Event('change', {bubbles: true})); }", css);
+            return;
+        }
+        var selected = a.Get("mode") == "ui"
+            ? await SelectUiAsync(ctx, css, values, clear)
+            : await SetSelectValuesAsync(ctx, css, values, clear, a.ContainsKey("wait_options_ms") ? a.GetInt("wait_options_ms", 0) : null);
+        ctx.Log($"  {css} = [{string.Join(", ", selected)}]");
+    }
+
+    public static async Task FiltersAsync(StepContext ctx, object? args)
+    {
+        foreach (var (id, values) in Args.Map(args, "_"))
+            await SelectFilterAsync(ctx, new Dictionary<string, object?> { ["id"] = id, ["options"] = values });
+    }
+
+    // ------------------------------------------------------------------ dates
+
+    public static async Task SetDateAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "from");
+        var page = ctx.Page;
+        var dcfg = ctx.Config.Date;
+        var mode = a.Get("mode") ?? (a.ContainsKey("preset") ? "preset" : dcfg.Mode);
+        await page.WaitForSelectorAsync(ctx.Sel.Datepicker, new() { State = WaitForSelectorState.Attached, Timeout = ctx.Timeouts.Default });
+        var input = page.Locator(ctx.Sel.DatepickerInput).First;
+
+        if (mode == "preset")
+        {
+            ctx.Log($"  date preset -> {a.Get("preset")}");
+            await input.ClickAsync();
+            await page.GetByText(TextRegex(a.Get("preset")!, exact: true)).First.ClickAsync();
+            return;
+        }
+
+        var limits = await DateParser.GetLimitsAsync(page);
+        var from = DateParser.Parse(a.Get("from") ?? throw new StepException("set_date needs from"), limits);
+        var to = DateParser.Parse(a.Get("to") ?? a.Get("from")!, limits);
+        if (from > to) throw new StepException($"Date from {from:yyyy-MM-dd} is after to {to:yyyy-MM-dd}");
+        if (limits.Min is { } min && from < min) ctx.Log($"  WARNING: {from:yyyy-MM-dd} < dashboard minDate {min:yyyy-MM-dd}");
+        if (limits.Max is { } max && to > max) ctx.Log($"  WARNING: {to:yyyy-MM-dd} > dashboard maxDate {max:yyyy-MM-dd}");
+        ctx.Vars["date_from"] = from.ToString("yyyy-MM-dd");
+        ctx.Vars["date_to"] = to.ToString("yyyy-MM-dd");
+
+        if (mode == "input")
+        {
+            var fmt = a.Get("input_format") ?? dcfg.InputFormat;
+            var sep = a.Get("range_separator") ?? dcfg.RangeSeparator;
+            var text = from.ToString(fmt, CultureInfo.InvariantCulture) + sep + to.ToString(fmt, CultureInfo.InvariantCulture);
+            ctx.Log($"  date -> '{text}'");
+            await input.ClickAsync();
+            await input.PressAsync("Control+A");
+            await input.PressAsync("Delete");
+            await input.PressSequentiallyAsync(text, new() { Delay = 20 });
+            await input.PressAsync("Enter");
+            await page.Keyboard.PressAsync("Escape");
+            await page.WaitForTimeoutAsync(300);
+            var shown = await input.InputValueAsync();
+            if (shown.Replace(" ", "") != text.Replace(" ", ""))
+                ctx.Log($"  WARNING: date input now shows '{shown}' (expected '{text}'). " +
+                        "Check date.input_format in config.yaml or use mode: calendar");
+        }
+        else if (mode == "calendar")
+        {
+            ctx.Log($"  date (calendar) -> {from:yyyy-MM-dd} .. {to:yyyy-MM-dd}");
+            await input.ClickAsync();
+            await CalendarPickAsync(ctx, from);
+            await CalendarPickAsync(ctx, to);
+            if (dcfg.Calendar.Apply is { } apply) await page.Locator(apply).First.ClickAsync();
+            await page.Keyboard.PressAsync("Escape");
+        }
+        else
+        {
+            throw new StepException($"Unknown date mode '{mode}'");
+        }
+    }
+
+    private static async Task CalendarPickAsync(StepContext ctx, DateOnly d)
+    {
+        var cal = ctx.Config.Date.Calendar;
+        var page = ctx.Page;
+        var target = new DateOnly(d.Year, d.Month, 1);
+        for (var i = 0; ; i++)
+        {
+            if (i > 36) throw new StepException($"Could not navigate calendar to {d:MMMM yyyy}");
+            var title = Regex.Replace(await page.Locator(cal.Title).First.InnerTextAsync(), @"\s+", " ").Trim();
+            if (DateOnly.TryParseExact(title, new[] { "MMMM yyyy", "MMM yyyy" }, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces, out var shown) && shown == target)
+                break;
+            if (title.Contains(d.ToString("MMMM", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase)
+                && title.Contains(d.Year.ToString()))
+                break;
+            var goNext = shown == default || shown < target;
+            await page.Locator(goNext ? cal.Next : cal.Prev).First.ClickAsync();
+            await page.WaitForTimeoutAsync(150);
+        }
+        await page.Locator(cal.Day).Filter(new() { HasTextRegex = TextRegex(d.Day.ToString(), exact: true) }).First.ClickAsync();
+    }
+
+    // ------------------------------------------------------------------ query / results
+
+    public static async Task ApplyAsync(StepContext ctx, object? args)
+    {
+        if (!await ClickUpdateIfVisibleAsync(ctx)) ctx.Log("  nothing to apply");
+    }
+
+    public static async Task ChooseViewAsync(StepContext ctx, object? args)
+    {
+        var page = ctx.Page;
+        await ClickUpdateIfVisibleAsync(ctx);
+        var a = Args.Map(args, "view");
+        ILocator loc;
+        string label;
+        if (a.Get("text") is { } text)
+        {
+            loc = page.Locator(".chartModeSelector").Filter(new() { HasTextRegex = TextRegex(text) }).First;
+            label = text;
+        }
+        else
+        {
+            var key = a.Get("view") ?? throw new StepException("choose_view needs a view");
+            var css = ctx.Config.Views.GetValueOrDefault(key, key);
+            loc = css.StartsWith('#') || css.StartsWith('.') || css.StartsWith('[')
+                ? page.Locator(css).First
+                : page.Locator(".chartModeSelector").Filter(new() { HasTextRegex = TextRegex(key) }).First;
+            label = key;
+        }
+        await loc.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = ctx.Timeouts.DataLoad });
+        ctx.Log($"  view -> {label}");
+        await loc.ClickAsync();
+        if (a.Get("municipality") is { } muni)
+            await SelectFilterAsync(ctx, new Dictionary<string, object?> { ["id"] = "municipalitySelect", ["options"] = muni });
+    }
+
+    public static async Task WaitForTableAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "min_rows");
+        var page = ctx.Page;
+        var timeout = a.GetInt("timeout", ctx.Timeouts.DataLoad);
+        var minRows = a.GetInt("min_rows", 1);
+        var rowsSel = a.Get("rows") ?? ctx.Sel.TableRows;
+        var sw = Stopwatch.StartNew();
+        while (true)
+        {
+            await CheckErrorAsync(ctx);
+            var resultsVisible = await page.Locator(ctx.Sel.Results).First.IsVisibleAsync();
+            var rows = resultsVisible ? await page.Locator(rowsSel).CountAsync() : 0;
+            var loading = !string.IsNullOrEmpty(ctx.Sel.Loading) && await page.Locator(ctx.Sel.Loading).CountAsync() > 0;
+            if (resultsVisible && rows >= minRows && !loading) break;
+            if (sw.ElapsedMilliseconds > timeout)
+                throw new StepException($"Timed out after {timeout / 1000}s waiting for table " +
+                                        $"(results visible={resultsVisible}, rows={rows}, loading={loading})");
+            await page.WaitForTimeoutAsync(1000);
+        }
+        await page.WaitForTimeoutAsync(a.GetInt("settle_ms", 1500)); // let the table finish rendering
+        var count = await page.Locator(rowsSel).CountAsync();
+        ctx.Vars["rows"] = count;
+        ctx.Log($"  table ready: {count} rows ({sw.Elapsed.TotalSeconds:0.0}s)");
+    }
+
+    // ------------------------------------------------------------------ download
+
+    private static readonly Dictionary<string, string> FormatText = new()
+    {
+        ["xlsx"] = "excel|xlsx",
+        ["xls"] = "excel|xls",
+        ["csv"] = "csv",
+        ["json"] = "json",
+        ["pdf"] = "pdf",
+    };
+
+    public static async Task DownloadTableAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "format");
+        var page = ctx.Page;
+        var fmt = (a.Get("format") ?? "").ToLowerInvariant();
+        var buttonText = a.Get("button_text") ?? ctx.Sel.DownloadButtonText;
+
+        if (a.GetValueOrDefault("format_select") is Dictionary<string, object?> fs)
+            await SetSelectValuesAsync(ctx, fs.Get("selector")!, new() { fs.Get("option")! }, true, null);
+
+        var scope = page.Locator(a.Get("container") ?? ctx.Sel.TableContainer).First;
+        var btn = scope.Locator("button, a, [role=button]").Filter(new() { HasTextRegex = TextRegex(buttonText) }).First;
+        if (await btn.CountAsync() == 0) // button may live in a toolbar outside the container
+            btn = page.Locator("button, a, [role=button]").Filter(new() { HasTextRegex = TextRegex(buttonText) }).First;
+        await btn.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = ctx.Timeouts.Default });
+        await btn.ScrollIntoViewIfNeededAsync();
+
+        Regex? optionRe = a.Get("format_text") is { } ft ? TextRegex(ft)
+            : fmt != "" ? new Regex(FormatText.GetValueOrDefault(fmt, Regex.Escape(fmt)), RegexOptions.IgnoreCase)
+            : null;
+
+        ctx.Log($"  click '{buttonText}'" + (optionRe is null ? "" : $" -> {optionRe}"));
+        var download = await page.RunAndWaitForDownloadAsync(async () =>
+        {
+            await btn.ClickAsync();
+            if (optionRe is not null) await ClickFormatOptionAsync(ctx, btn, optionRe);
+        }, new() { Timeout = ctx.Timeouts.Download });
+
+        var suggested = download.SuggestedFilename ?? "table";
+        var ext = Path.GetExtension(suggested);
+        if (ext == "" && fmt != "") ext = "." + fmt;
+        ctx.Vars.TryAdd("date_from", "");
+        ctx.Vars.TryAdd("date_to", "");
+        ctx.Vars["timestamp"] = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var name = a.Get("filename") is { } template
+            ? string.Join("/", ScenarioLoader.RenderString(template,
+                ctx.Vars.ToDictionary(kv => kv.Key, kv => (object?)Safe(Args.Str(kv.Value)))).Split('/').Select(Safe))
+            : $"{Safe(ctx.Scenario.Name)}_{ctx.Vars["timestamp"]}";
+        if (!name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) name += ext;
+
+        var target = Path.Combine(ctx.OutputDir, name);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+        await download.SaveAsAsync(target);
+        if (await download.FailureAsync() is { } failure) throw new StepException($"Download failed: {failure}");
+        var size = new FileInfo(target).Length;
+        ctx.Log($"  saved {target} ({size:N0} bytes, server name '{suggested}')");
+        var rows = a.GetBool("verify", true) ? VerifyFile(target) : -1;
+        if (rows >= 0) ctx.Log($"  verified: {rows} data rows");
+        ctx.Downloads.Add(new DownloadInfo(target, size, suggested, rows));
+    }
+
+    /// <summary>After clicking the download button, pick the file-type item if a menu/modal appears.</summary>
+    private static async Task ClickFormatOptionAsync(StepContext ctx, ILocator btn, Regex optionRe)
+    {
+        var candidates = ctx.Page.Locator(
+            ".dropdown-menu.show a, .dropdown-menu.show button, .dropdown-menu.show li, " +
+            ".p-menu a, .p-menuitem-link, .p-tieredmenu a, .modal.show button, .modal.show a, " +
+            "[role=menuitem], [role=option], button, a, label").Filter(new() { HasTextRegex = optionRe });
+        var btnText = (await btn.InnerTextAsync()).Trim();
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 5000)
+        {
+            var n = await candidates.CountAsync();
+            for (var i = 0; i < n; i++)
+            {
+                var c = candidates.Nth(i);
+                try
+                {
+                    if (await c.IsVisibleAsync() && !string.Equals((await c.InnerTextAsync()).Trim(), btnText, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await c.ClickAsync();
+                        return;
+                    }
+                }
+                catch (PlaywrightException)
+                {
+                    // element went away between count and click; retry
+                }
+            }
+            await ctx.Page.WaitForTimeoutAsync(250);
+        }
+        ctx.Log("  (no file-type menu appeared; assuming the button downloads directly)");
+    }
+
+    private static int VerifyFile(string path)
+    {
+        if (new FileInfo(path).Length == 0) throw new StepException($"Downloaded file {path} is empty");
+        int rows;
+        switch (Path.GetExtension(path).ToLowerInvariant())
+        {
+            case ".xlsx" or ".xlsm":
+                using (var wb = new XLWorkbook(path))
+                    rows = wb.Worksheets.Sum(ws => Math.Max((ws.LastRowUsed()?.RowNumber() ?? 0) - 1, 0));
+                break;
+            case ".csv" or ".txt":
+                rows = Math.Max(File.ReadLines(path).Count(l => l.Trim().Length > 0) - 1, 0);
+                break;
+            default:
+                return -1;
+        }
+        if (rows <= 0) throw new StepException($"Downloaded file {path} has no data rows");
+        return rows;
+    }
+
+    // ------------------------------------------------------------------ generic steps
+
+    public static async Task ClickAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "selector");
+        var page = ctx.Page;
+        var loc = a.Get("text") is { } text ? page.GetByText(text, new() { Exact = a.GetBool("exact", false) })
+            : a.Get("role") is { } role ? page.GetByRole(Enum.Parse<AriaRole>(role, ignoreCase: true), new() { Name = a.Get("name") })
+            : page.Locator(a.Get("selector") ?? throw new StepException("click needs selector, text or role"));
+        ctx.Log($"  click {Args.Str(args)}");
+        await loc.Nth(a.GetInt("index", 0)).ClickAsync(new() { Timeout = a.GetInt("timeout", ctx.Timeouts.Default) });
+    }
+
+    public static Task FillAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "selector");
+        return ctx.Page.Locator(a.Get("selector")!).First.FillAsync(a.Get("value") ?? "");
+    }
+
+    public static Task PressAsync(StepContext ctx, object? args) =>
+        ctx.Page.Keyboard.PressAsync(Args.Map(args, "key").Get("key")!);
+
+    public static Task WaitAsync(StepContext ctx, object? args) =>
+        ctx.Page.WaitForTimeoutAsync(Args.Map(args, "ms").GetInt("ms", 1000));
+
+    public static Task WaitForAsync(StepContext ctx, object? args)
+    {
+        var a = Args.Map(args, "selector");
+        var state = Enum.Parse<WaitForSelectorState>(a.Get("state") ?? "visible", ignoreCase: true);
+        return ctx.Page.Locator(a.Get("selector")!).First.WaitForAsync(new() { State = state, Timeout = a.GetInt("timeout", ctx.Timeouts.DataLoad) });
+    }
+
+    public static async Task ScreenshotAsync(StepContext ctx, object? args)
+    {
+        var name = Args.Map(args, "name").Get("name") ?? "screenshot";
+        var path = Path.Combine(ctx.OutputDir, "screenshots", $"{Safe(ctx.Scenario.Name)}_{Safe(name)}.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        await ctx.Page.ScreenshotAsync(new() { Path = path, FullPage = true });
+        ctx.Log($"  screenshot {path}");
+    }
+
+    public static async Task EvaluateAsync(StepContext ctx, object? args)
+    {
+        var result = await ctx.Page.EvaluateAsync<JsonElement?>(Args.Map(args, "script").Get("script")!);
+        ctx.Log($"  js -> {result}");
+    }
+
+    public static Task PauseAsync(StepContext ctx, object? args) => ctx.Page.PauseAsync();
+
+    public static Task SetVarAsync(StepContext ctx, object? args)
+    {
+        foreach (var (k, v) in Args.Map(args, "_")) ctx.Vars[k] = v;
+        return Task.CompletedTask;
+    }
+}

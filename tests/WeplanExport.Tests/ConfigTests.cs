@@ -1,0 +1,82 @@
+using Xunit;
+
+namespace WeplanExport.Tests;
+
+public class ConfigTests
+{
+    private static readonly DateLimits Limits = new(new DateOnly(2025, 9, 23), new DateOnly(2026, 9, 23));
+
+    [Theory]
+    [InlineData("2026-08-01", 2026, 8, 1)]
+    [InlineData("01/08/2026", 2026, 8, 1)]
+    [InlineData("max", 2026, 9, 23)]
+    [InlineData("max-30d", 2026, 8, 24)]
+    [InlineData("max-1m", 2026, 8, 23)]
+    [InlineData("min+1w", 2025, 9, 30)]
+    [InlineData("today-1d", 2026, 1, 9)]
+    public void ParseDate(string input, int y, int m, int d) =>
+        Assert.Equal(new DateOnly(y, m, d), DateParser.Parse(input, Limits, today: new DateOnly(2026, 1, 10)));
+
+    [Fact]
+    public void ParseDate_Invalid_Throws() =>
+        Assert.Throws<StepException>(() => DateParser.Parse("next tuesday", Limits));
+
+    [Fact]
+    public void Matrix_Vars_Before_After_Skip_And_Filter()
+    {
+        var file = Path.GetTempFileName();
+        File.WriteAllText(file, """
+            vars: {fmt: xlsx}
+            before: [{goto: /x}]
+            after: [{screenshot: end}]
+            scenarios:
+              - name: a_${c}
+                tags: [t1]
+                matrix: {c: [X, Y]}
+                steps:
+                  - select_country: ${c}
+                  - download_table: {format: "${fmt}", filename: "${c}_${date_from}"}
+              - name: skipped
+                skip: true
+                steps: []
+              - name: plain
+                matrix: {n: [1, 2]}
+                steps: []
+            """);
+        var sc = ScenarioLoader.Load(new[] { file });
+        File.Delete(file);
+
+        Assert.Equal(new[] { "a_X", "a_Y", "plain[1]", "plain[2]" }, sc.Select(s => s.Name));
+        var steps = sc[1].Steps;
+        Assert.Equal(new[] { "goto", "select_country", "download_table", "screenshot" }, steps.Select(s => s.Name));
+        Assert.Equal("Y", steps[1].Args);
+        var dl = Assert.IsType<Dictionary<string, object?>>(steps[2].Args);
+        Assert.Equal("xlsx", dl["format"]);
+        Assert.Equal("Y_${date_from}", dl["filename"]);
+
+        Assert.Equal(new[] { "a_X", "a_Y" }, ScenarioLoader.Filter(sc, new() { "a_*" }, new()).Select(s => s.Name));
+        Assert.Equal(new[] { "a_X", "a_Y" }, ScenarioLoader.Filter(sc, new(), new() { "t1" }).Select(s => s.Name));
+    }
+
+    [Fact]
+    public void Config_Partial_File_Keeps_Defaults()
+    {
+        var file = Path.GetTempFileName();
+        File.WriteAllText(file, """
+            output_dir: out
+            date: {input_format: dd/MM/yyyy}
+            selectors: {download_button_text: Export}
+            views: {custom: "#byX"}
+            """);
+        var cfg = AppConfig.Load(file);
+        File.Delete(file);
+
+        Assert.Equal("out", cfg.OutputDir);
+        Assert.Equal("dd/MM/yyyy", cfg.Date.InputFormat);
+        Assert.Equal(" - ", cfg.Date.RangeSeparator);
+        Assert.Equal("Export", cfg.Selectors.DownloadButtonText);
+        Assert.Equal("#tableProvinces", cfg.Selectors.TableContainer);
+        Assert.Equal("#byCountry", cfg.Views["macro"]);
+        Assert.Equal("#byX", cfg.Views["custom"]);
+    }
+}

@@ -25,7 +25,7 @@ date:
   #   input    : gõ "08/01/2026 - 08/31/2026" vào ô date
   #   calendar : bấm chọn ngày trên lịch popup
   mode: input
-  input_format: "%m/%d/%Y"
+  input_format: "MM/dd/yyyy"      # định dạng ngày kiểu .NET (dd/MM/yyyy, yyyy-MM-dd ...)
   range_separator: " - "
 
 selectors:

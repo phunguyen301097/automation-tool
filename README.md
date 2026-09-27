@@ -1,6 +1,6 @@
-# weplan_export: tự động Download Table trên Weplan Analytics Dashboard
+# weplan-export (.NET): tự động Download Table trên Weplan Analytics Dashboard
 
-Tool dùng **Python + Playwright** để điều khiển trình duyệt thật, chạy theo **kịch bản YAML** (giống automation test):
+Tool dùng **C# / .NET 8 + Playwright for .NET** để điều khiển trình duyệt thật, chạy theo **kịch bản YAML** (giống automation test):
 
 ```
 Vào menu  →  chọn quốc gia  →  chọn khoảng thời gian  →  chọn mạng / bộ lọc
@@ -13,19 +13,31 @@ Không cần source code của web: tool thao tác trực tiếp trên giao di�
 
 ## 1. Cài đặt
 
-Cần Python 3.10 trở lên.
+Cần [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-python -m playwright install chromium   # hoặc bỏ qua và đặt browser.channel: chrome trong config.yaml
+dotnet build
+dotnet run --project src/WeplanExport -- install-browser   # tải Chromium cho Playwright (1 lần)
 ```
+
+Nếu không muốn tải Chromium, đặt `browser.channel: chrome` (hoặc `msedge`) trong `config.yaml` để dùng trình
+duyệt có sẵn trên máy.
+
+Để tạo file `.exe` chạy được trên máy không cài .NET:
+
+```bash
+dotnet publish src/WeplanExport -c Release -r win-x64 --self-contained -o publish
+# chép config.yaml và thư mục scenarios/ vào cạnh publish/weplan-export.exe
+```
+
+Các lệnh bên dưới viết ở dạng `weplan-export ...`. Khi chạy từ source, thay bằng
+`dotnet run --project src/WeplanExport -- ...`. Tool đọc `config.yaml` và `scenarios/` trong thư mục hiện tại
+(đổi file config bằng `-c đường_dẫn`).
 
 ## 2. Đăng nhập (một lần)
 
 ```bash
-python -m weplan_export login
+weplan-export login
 ```
 
 Một cửa sổ trình duyệt sẽ mở ra. Bạn đăng nhập bình thường (có captcha hay 2FA cũng được). Khi thấy dashboard,
@@ -33,26 +45,26 @@ quay lại terminal và nhấn **Enter**. Session được lưu vào `.auth/stat
 Khi session hết hạn thì chạy lại lệnh này.
 
 > Nếu trang login chỉ có user/password thì có thể đặt biến môi trường `WEPLAN_USERNAME` / `WEPLAN_PASSWORD`,
-> tool sẽ tự đăng nhập khi session hết hạn (selector ô nhập nằm ở `auth:` trong `weplan_export/config.py`).
+> tool sẽ tự đăng nhập khi session hết hạn (selector ô nhập nằm ở `auth:`, xem `src/WeplanExport/AppConfig.cs`).
 
 ## 3. Chạy
 
 ```bash
-python -m weplan_export list                        # xem danh sách kịch bản
-python -m weplan_export run                         # chạy tất cả scenarios/*.yaml
-python -m weplan_export run scenarios/coverage_macro.yaml
-python -m weplan_export run -k "coverage_*"         # lọc theo tên (glob)
-python -m weplan_export run -t daily                # lọc theo tag
-python -m weplan_export run --headed --slow-mo 300  # xem trình duyệt chạy, chậm lại để quan sát
-python -m weplan_export run --trace                 # ghi Playwright trace để debug
-python -m weplan_export run --dry-run               # chỉ in các bước sau khi thay biến
-python -m weplan_export steps                       # danh sách các loại bước
+weplan-export list                          # xem danh sách kịch bản
+weplan-export run                           # chạy tất cả scenarios/*.yaml
+weplan-export run scenarios/coverage_macro.yaml
+weplan-export run -k "coverage_*"           # lọc theo tên (glob)
+weplan-export run -t daily                  # lọc theo tag
+weplan-export run --headed --slow-mo 300    # xem trình duyệt chạy, chậm lại để quan sát
+weplan-export run --trace                   # ghi Playwright trace để debug
+weplan-export run --dry-run                 # chỉ in các bước sau khi thay biến
+weplan-export steps                         # danh sách các loại bước
 ```
 
 File được lưu vào thư mục `downloads/` (đổi ở `output_dir`). Cuối mỗi lần chạy sẽ in bảng PASS/FAIL, còn
 `downloads/_runs/<thời gian>/report.json` chứa chi tiết. Nếu một kịch bản lỗi, tool chụp màn hình và lưu HTML
 của trang tại thời điểm lỗi vào cùng thư mục đó, rồi chạy tiếp các kịch bản còn lại (dùng `-x` để dừng ngay).
-Exit code là 1 nếu có kịch bản lỗi, nên có thể gắn vào cron hoặc Task Scheduler.
+Exit code là 1 nếu có kịch bản lỗi, nên có thể gắn vào Windows Task Scheduler hoặc cron.
 
 ## 4. Viết kịch bản
 
@@ -120,9 +132,9 @@ Device (`manufacturer_filter`, `brand_filter`, `model_filter`...), Wi‑Fi (`wif
 Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript chạy). Hai phần do JavaScript vẽ ra sau nên
 **cần xác nhận trên web thật ở lần chạy đầu**:
 
-1. **Ô chọn ngày** (`#datepicker`). Mặc định tool gõ `MM/DD/YYYY - MM/DD/YYYY` vào ô input. Log sẽ in
+1. **Ô chọn ngày** (`#datepicker`). Mặc định tool gõ `MM/dd/yyyy - MM/dd/yyyy` vào ô input. Log sẽ in
    `WARNING: date input now shows ...` nếu trang không nhận định dạng đó. Khi đó:
-   - đổi `date.input_format` / `date.range_separator` trong `config.yaml`, hoặc
+   - đổi `date.input_format` (định dạng ngày kiểu .NET, ví dụ `dd/MM/yyyy`) / `date.range_separator` trong `config.yaml`, hoặc
    - dùng `date.mode: calendar` (bấm từng ngày trên lịch; selector của lịch nằm trong `date.calendar`), hoặc
    - nếu có nút preset: `set_date: {preset: "Last 30 days"}`.
 2. **Nút "Download table" và menu chọn loại file**. Tool tìm nút có chữ `Download table` trong `#tableProvinces`.
@@ -133,8 +145,8 @@ Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript c
 Cách tìm selector đúng trên web thật:
 
 ```bash
-python -m weplan_export run -k tên_kịch_bản --headed   # thêm bước `- pause: {}` vào chỗ cần xem
-python -m playwright codegen --load-storage .auth/state.json https://dashboard.weplananalytics.com/app/bi/coverage
+weplan-export run -k tên_kịch_bản --headed   # thêm bước `- pause: {}` vào chỗ cần xem
+pwsh src/WeplanExport/bin/Debug/net8.0/playwright.ps1 codegen --load-storage .auth/state.json https://dashboard.weplananalytics.com/app/bi/coverage
 ```
 
 `codegen` ghi lại các thao tác bạn click và in ra selector tương ứng. Selector đó dùng được ngay trong các bước
@@ -147,22 +159,25 @@ Các ô chọn (bootstrap-select) mặc định được đặt giá trị qua J
 ## 6. Kiểm thử
 
 `tests/mock_site/index.html` mô phỏng cấu trúc DOM của dashboard (menu nhiều cấp, đổi quốc gia, date, filter
-tải bất đồng bộ, thẻ Macro data, table load chậm, nút Download table có menu Excel/CSV). Các test chạy toàn bộ
-luồng trên trang mô phỏng này:
+tải bất đồng bộ, thẻ Macro data, table load chậm, nút Download table có menu Excel/CSV). Các test xUnit chạy toàn
+bộ luồng trên trang mô phỏng này:
 
 ```bash
-python -m pytest -q
+dotnet test
 ```
 
 ## Cấu trúc
 
 ```
-config.yaml                 cấu hình (URL, timeout, selector, định dạng ngày)
-scenarios/*.yaml            kịch bản
-weplan_export/
-  cli.py                    lệnh login / run / list / steps
-  config.py                 đọc config, kịch bản, vars, matrix
-  actions.py                các bước (menu, country, date, filter, view, wait, download...)
-  runner.py                 mở trình duyệt, chạy kịch bản, báo cáo
-tests/                      test với trang mô phỏng
+WeplanExport.sln
+config.yaml                       cấu hình (URL, timeout, selector, định dạng ngày)
+scenarios/*.yaml                  kịch bản (cùng định dạng với bản Python)
+src/WeplanExport/
+  Program.cs                      lệnh login / install-browser / run / list / steps
+  AppConfig.cs                    cấu hình và giá trị mặc định
+  Scenarios.cs                    đọc kịch bản, vars, matrix, before/after
+  Steps.cs                        các bước (menu, country, date, filter, view, wait, download...)
+  DateParser.cs                   ngày tuyệt đối / tương đối (max-30d...)
+  Runner.cs                       mở trình duyệt, chạy kịch bản, báo cáo
+tests/WeplanExport.Tests/         test xUnit (mock server + trang mô phỏng)
 ```
