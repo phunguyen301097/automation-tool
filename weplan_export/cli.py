@@ -81,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
             print(yaml.safe_dump(s.steps, allow_unicode=True, sort_keys=False))
         return 0
 
+    print(f"Running {len(scenarios)} scenario(s):")
+    for s in scenarios:
+        print(f"  - {s.name}")
+    print()
     from .runner import run_scenarios
     results = run_scenarios(scenarios, config, headed=True if args.headed else None,
                             slow_mo=args.slow_mo, trace=args.trace, stop_on_fail=args.stop_on_fail)

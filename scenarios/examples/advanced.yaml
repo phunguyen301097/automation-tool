@@ -1,4 +1,4 @@
-# Các ví dụ nâng cao. Chạy riêng:  python -m weplan_export run scenarios/examples_advanced.yaml
+# Các ví dụ nâng cao (KHÔNG chạy mặc định). Chạy riêng:  python -m weplan_export run scenarios/examples/advanced.yaml
 #
 # `before` / `after` được chèn vào đầu / cuối mọi scenario trong file.
 vars:

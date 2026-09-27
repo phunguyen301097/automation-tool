@@ -39,8 +39,9 @@ Khi session hết hạn thì chạy lại lệnh này.
 
 ```bash
 python -m weplan_export list                        # xem danh sách kịch bản
-python -m weplan_export run                         # chạy tất cả scenarios/*.yaml
+python -m weplan_export run                         # chạy tất cả scenarios/*.yaml (không gồm scenarios/examples/)
 python -m weplan_export run scenarios/coverage_macro.yaml
+python -m weplan_export run scenarios/examples/advanced.yaml   # chạy file ví dụ
 python -m weplan_export run -k "coverage_*"         # lọc theo tên (glob)
 python -m weplan_export run -t daily                # lọc theo tag
 python -m weplan_export run --headed --slow-mo 300  # xem trình duyệt chạy, chậm lại để quan sát
@@ -82,6 +83,10 @@ scenarios:
       network: [ECONET, LUMITEL]
     steps: [...]
 ```
+
+**Mỗi scenario là một lần chạy độc lập** (mở menu, chọn quốc gia, ngày, filter... rồi tải file), còn mỗi tổ hợp
+trong `matrix` là một scenario riêng. Trước khi chạy, tool in danh sách scenario sẽ chạy. Muốn chạy ít hơn thì chỉ
+định file, lọc bằng `-k` / `-t`, hoặc thêm `skip: true` vào scenario không cần.
 
 Mức file còn có `before:` và `after:`: các bước chèn vào đầu và cuối mọi scenario. Thêm `skip: true` để tạm
 bỏ qua một scenario.
@@ -178,7 +183,7 @@ python -m pytest -q
 
 ```
 config.yaml                 cấu hình (URL, timeout, selector, định dạng ngày)
-scenarios/*.yaml            kịch bản
+scenarios/*.yaml            kịch bản (scenarios/examples/: ví dụ, không chạy mặc định)
 weplan_export/
   cli.py                    lệnh login / run / list / steps
   config.py                 đọc config, kịch bản, vars, matrix
