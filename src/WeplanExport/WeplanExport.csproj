@@ -15,4 +15,8 @@
     <PackageReference Include="ClosedXML" Version="0.104.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="calendar.js" LogicalName="calendar.js" />
+  </ItemGroup>
+
 </Project>

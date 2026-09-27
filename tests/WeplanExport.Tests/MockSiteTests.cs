@@ -316,4 +316,42 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         await ctx.CloseAsync();
         Assert.True(File.Exists(Path.Combine(config.OutputDir, "manual", "table_export.csv")));
     }
+
+    [Fact]
+    public async Task VideoLikeCalendar_NavigatesMonths()
+    {
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: nav_months
+                steps:
+                  - goto: /app/bi/coverage
+                  - set_date: {from: 2026-05-31, to: 2026-07-01}
+                  - choose_view: macro
+                  - wait_for_table: {}
+                  - download_table: {format: csv}
+            """, Config());
+
+        var r = Assert.Single(results);
+        Assert.True(r.Ok, r.Error);
+        Assert.Contains("date,2026-05-31..2026-07-01", File.ReadAllText(r.Downloads[0].File));
+    }
+
+    [Fact]
+    public async Task DaterangepickerVariant()
+    {
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: drp
+                steps:
+                  - goto: /app/bi/coverage?dp=drp
+                  - set_date: {from: 2026-08-03, to: 2026-09-14}
+                  - choose_view: macro
+                  - wait_for_table: {}
+                  - download_table: {format: csv}
+            """, Config());
+
+        var r = Assert.Single(results);
+        Assert.True(r.Ok, r.Error);
+        Assert.Contains("date,2026-08-03..2026-09-14", File.ReadAllText(r.Downloads[0].File));
+    }
 }

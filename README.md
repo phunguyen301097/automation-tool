@@ -132,13 +132,14 @@ Device (`manufacturer_filter`, `brand_filter`, `model_filter`...), Wi‑Fi (`wif
 Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript chạy). Hai phần do JavaScript vẽ ra sau nên
 **cần xác nhận trên web thật ở lần chạy đầu**:
 
-1. **Ô chọn ngày** (`#datepicker`, hiển thị `01-09-2026 - 25-09-2026`). Với `date.mode: auto` (mặc định),
-   tool gõ vào ô nhập nếu có; nếu không có thì bấm mở popup, điền ô nhập trong popup, hoặc bấm ngày bắt đầu và
-   kết thúc trên lịch 2 tháng (kiểu daterangepicker) rồi bấm Apply. Log in ra `date widget now shows: ...` để
-   kiểm tra. Nếu không tìm được, HTML của ô ngày được lưu vào `downloads/_debug/`. Nếu vẫn không khớp:
-   - chỉnh `date.calendar` (selector tiêu đề tháng, nút prev/next, ô ngày, nút Apply) trong `config.yaml`, hoặc
-   - đổi `date.input_format` (kiểu .NET, mặc định `dd-MM-yyyy`) / `date.range_separator`, hoặc
-   - `set_date: {mode: skip}` để giữ khoảng ngày mặc định của dashboard.
+1. **Ô chọn ngày** (`#datepicker`). Trên dashboard, bấm vào ô sẽ mở popup 2 lịch tháng (`Aug 2026 | Sep 2026`,
+   nút `<` `>`); bấm ngày bắt đầu rồi ngày kết thúc thì popup tự đóng. Với `date.mode: auto` (mặc định) tool làm
+   đúng như vậy: mở popup, đọc tiêu đề tháng/năm **theo chữ trên màn hình** (không phụ thuộc tên class của thư
+   viện lịch), bấm `<`/`>` tới đúng tháng, bấm ngày bắt đầu và kết thúc, rồi kiểm tra ô ngày hiển thị đúng
+   `dd-mm-yyyy - dd-mm-yyyy` (sai thì báo lỗi, tránh tải nhầm khoảng thời gian). Ngày bị gạch (sau ngày có dữ
+   liệu mới nhất) sẽ báo lỗi rõ ràng. Có thể dùng mốc có sẵn trong popup: `set_date: {preset: "Last 30 days"}`
+   (`Last 7 days`, `Current month`, `Last month`, `Last 3 months`...). Nếu không nhận ra được, HTML của ô ngày
+   được lưu vào `downloads/_debug/`; tạm thời có thể dùng `set_date: {mode: skip}`.
 2. **Nút "Download table" và menu chọn loại file** (`As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG`).
    `format: xlsx|json|csv|pdf|txt|png` chọn đúng mục tương ứng. Nếu chữ trên web khác thì chỉnh
    `download_button_text`, hoặc `format_text` trong bước `download_table`.
