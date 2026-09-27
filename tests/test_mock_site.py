@@ -243,3 +243,36 @@ def test_calendar_day_after_max_date_fails_clearly(tmp_path, config):
     r = _run(tmp_path, config, doc)[0]
     assert not r.ok
     assert "2026-09-25 is not selectable" in r.error
+
+
+def test_video_like_calendar_navigates_months(tmp_path, config):
+    """Default mock widget reproduces the recorded dashboard picker (no known class names)."""
+    doc = {"scenarios": [{
+        "name": "nav_months",
+        "steps": [
+            {"goto": "/app/bi/coverage"},
+            {"set_date": {"from": "2026-05-31", "to": "2026-07-01"}},
+            {"choose_view": "macro"},
+            {"wait_for_table": {}},
+            {"download_table": {"format": "csv"}},
+        ],
+    }]}
+    r = _run(tmp_path, config, doc)[0]
+    assert r.ok, r.error
+    assert "date,2026-05-31..2026-07-01" in Path(r.downloads[0]["file"]).read_text()
+
+
+def test_daterangepicker_variant(tmp_path, config):
+    doc = {"scenarios": [{
+        "name": "drp",
+        "steps": [
+            {"goto": "/app/bi/coverage?dp=drp"},
+            {"set_date": {"from": "2026-08-03", "to": "2026-09-14"}},
+            {"choose_view": "macro"},
+            {"wait_for_table": {}},
+            {"download_table": {"format": "csv"}},
+        ],
+    }]}
+    r = _run(tmp_path, config, doc)[0]
+    assert r.ok, r.error
+    assert "date,2026-08-03..2026-09-14" in Path(r.downloads[0]["file"]).read_text()

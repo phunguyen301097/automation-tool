@@ -103,18 +103,67 @@ $('#dropdownCountryChooser').addEventListener('change', e => {
 
 let dateRange = null;
 // Date widget variants (?dp=...):
-//   (default) like the real dashboard: text "01-09-2026 - 25-09-2026", click opens a
-//             daterangepicker with two month calendars and an Apply button.
+//   (default) like the real dashboard (see the recorded video): text "27-08-2026 - 23-09-2026";
+//             click opens two month calendars ("Aug" "2026" | "Sep" "2026", < and > arrows,
+//             Monday first, days after max struck through, presets on the left). Picking the
+//             start and end day applies and closes. Class names deliberately match no library.
+//   drp     : daterangepicker (two months + Apply button).
 //   input   : a text input taking "dd-mm-yyyy - dd-mm-yyyy" + Enter.
 //   popup   : text; click opens a popup with start/end inputs.
 //   none    : text; nothing usable opens.
-const dpMode = params.get('dp') || 'drp';
+const dpMode = params.get('dp') || 'real';
 const pad = n => String(n).padStart(2, '0');
 const dmy = d => `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
 const isoOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseDmy = v => { const m = v.trim().match(/^(\d\d)-(\d\d)-(\d{4})$/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
 const maxDate = new Date(2026, 8, 23);
 function setRange(a, b) { dateRange = `${a}..${b}`; markChanged(); }
+const e2dmy = iso => iso.split('-').reverse().join('-');
+const DAY_NAMES = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+function openRealPicker() {
+  const root = $('#datepicker');
+  let view = new Date(2026, 7, 1), start = null;  // left month = Aug 2026
+  const pop = document.createElement('div');
+  pop.className = 'x9k-pop';
+  pop.style.cssText = 'position:absolute;background:#fff;border:1px solid #ccc;display:flex;padding:6px;z-index:10';
+  root.appendChild(pop);
+  const MON = d => d.toLocaleString('en-US', {month: 'short'});
+  const cell = 'display:inline-block;width:28px;text-align:center;padding:4px 0;cursor:pointer';
+  function month(first, side) {
+    let h = `<div class="q1"><div class="q2" style="display:flex;gap:12px;align-items:center;padding:4px">` +
+      (side === 'left' ? '<button class="q3a" style="width:24px">&lt;</button>' : '<span style="width:24px"></span>') +
+      `<span class="q4">${MON(first)}</span><span class="q5">${first.getFullYear()}</span>` +
+      (side === 'right' ? '<button class="q3b" style="width:24px">&gt;</button>' : '<span style="width:24px"></span>') +
+      '</div><div>' + DAY_NAMES.map(n => `<span style="${cell}">${n}</span>`).join('') + '</div>';
+    const d = new Date(first); d.setDate(1 - ((first.getDay() + 6) % 7));
+    for (let i = 0; i < 42; i++) {
+      if (i % 7 === 0) h += '<div>';
+      const other = d.getMonth() !== first.getMonth(), after = d > maxDate;
+      const style = cell + (other ? ';color:#bbb' : '') + (after ? ';text-decoration:line-through' : '');
+      h += `<span class="q6" style="${style}" data-d="${isoOf(d)}" data-ok="${!other && !after}">${d.getDate()}</span>`;
+      if (i % 7 === 6) h += '</div>';
+      d.setDate(d.getDate() + 1);
+    }
+    return h + '</div>';
+  }
+  function render() {
+    pop.innerHTML = '<div class="q7" style="display:flex;flex-direction:column;padding-right:8px">' +
+      ['Last 7 days', 'Last 30 days', 'Current month', 'Last month'].map(t => `<span class="q8">${t}</span>`).join('') +
+      '</div>' + month(view, 'left') + month(new Date(view.getFullYear(), view.getMonth() + 1, 1), 'right');
+    pop.querySelector('.q3a').onclick = e => { e.stopPropagation(); view = new Date(view.getFullYear(), view.getMonth() - 1, 1); render(); };
+    pop.querySelector('.q3b').onclick = e => { e.stopPropagation(); view = new Date(view.getFullYear(), view.getMonth() + 1, 1); render(); };
+    pop.querySelectorAll('.q6').forEach(c => c.onclick = e => {
+      e.stopPropagation();
+      if (c.dataset.ok !== 'true') return;
+      if (!start) { start = c.dataset.d; c.style.background = '#2a7ab8'; return; }
+      const [a, b] = [start, c.dataset.d].sort();
+      setRange(a, b);
+      $('#datepicker span').textContent = `${e2dmy(a)} - ${e2dmy(b)}`;
+      pop.remove();
+    });
+  }
+  render();
+}
 
 if (dpMode === 'input') {
   $('#datepicker').innerHTML = '<input type="text" class="form-control" value="01-09-2026 - 23-09-2026">';
@@ -124,20 +173,21 @@ if (dpMode === 'input') {
     if (a && b) setRange(a, b); else { e.target.value = ''; dateRange = null; }
   });
 } else {
-  $('#datepicker').innerHTML = '<div class="form-control reportrange-text"><span>01-09-2026 - 23-09-2026</span></div>';
+  $('#datepicker').innerHTML = '<div class="form-control reportrange-text"><span>27-08-2026 - 23-09-2026</span></div>';
   const text = $('#datepicker span');
   $('#datepicker .reportrange-text').addEventListener('click', () => {
-    if ($('.daterangepicker') || dpMode === 'none') return;
+    if ($('.daterangepicker') || $('.x9k-pop') || dpMode === 'none') return;
     if (dpMode === 'popup') {
       document.body.insertAdjacentHTML('beforeend',
         '<div class="daterangepicker"><input name="start"><input name="end"></div>');
       $('.daterangepicker input[name=end]').addEventListener('keydown', e => {
         if (e.key !== 'Enter') return;
         const a = parseDmy($('.daterangepicker input[name=start]').value), b = parseDmy(e.target.value);
-        if (a && b) setRange(a, b);
+        if (a && b) { setRange(a, b); text.textContent = `${e2dmy(a)} - ${e2dmy(b)}`; $('.daterangepicker').remove(); }
       });
       return;
     }
+    if (dpMode === 'real') { openRealPicker(); return; }
     // daterangepicker: left month shows `view`, right month shows view + 1.
     let view = new Date(2026, 8, 1), start = null, end = null;
     const pop = document.createElement('div');

@@ -357,52 +357,107 @@ def set_date(ctx: Context, args: dict) -> None:
 
     fmt = dcfg["input_format"]
     cal = dcfg["calendar"]
-    if mode in ("auto", "input"):
-        inputs = _find_date_inputs(ctx, allow_calendar=(mode == "auto"))
-        if inputs is None:
-            mode = "calendar"  # auto: no input anywhere, but a calendar popup is open
+    expected = d_from.strftime(fmt) + dcfg["range_separator"] + d_to.strftime(fmt)
+    if mode not in ("auto", "input", "calendar"):
+        raise StepError(f"Unknown date mode '{mode}'")
+    kind, inputs = _detect_date_widget(ctx, allow_calendar=(mode != "input"),
+                                       prefer_calendar=(mode == "calendar"))
+    if kind == "inputs":
+        if len(inputs) >= 2:
+            # Separate start / end inputs.
+            ctx.log(f"  date -> start '{d_from.strftime(fmt)}', end '{d_to.strftime(fmt)}'")
+            _type_into(inputs[0], d_from.strftime(fmt))
+            _type_into(inputs[1], d_to.strftime(fmt))
         else:
-            if len(inputs) >= 2:
-                # Separate start / end inputs.
-                ctx.log(f"  date -> start '{d_from.strftime(fmt)}', end '{d_to.strftime(fmt)}'")
-                _type_into(inputs[0], d_from.strftime(fmt))
-                _type_into(inputs[1], d_to.strftime(fmt))
-            else:
-                text = d_from.strftime(fmt) + dcfg["range_separator"] + d_to.strftime(fmt)
-                ctx.log(f"  date -> '{text}'")
-                _type_into(inputs[0], text)
-                value = inputs[0].input_value()
-                if value.replace(" ", "") != text.replace(" ", ""):
-                    ctx.log(f"  WARNING: date input now shows '{value}' (expected '{text}'). "
-                            "Check date.input_format in config.yaml or use mode: calendar")
-            if cal.get("apply"):
-                _click_if_visible(page.locator(cal["apply"]).first)
-    if mode == "calendar":
+            ctx.log(f"  date -> '{expected}'")
+            _type_into(inputs[0], expected)
+    elif kind == "css_calendar":
         ctx.log(f"  date (calendar) -> {d_from} .. {d_to}")
-        if not _calendar_open(ctx):
-            _open_datepicker(ctx)
         for d in (d_from, d_to):
             _calendar_pick(ctx, cal, d)
-        if cal.get("apply"):
-            _click_if_visible(page.locator(cal["apply"]).first)
-    elif mode not in ("auto", "input"):
-        raise StepError(f"Unknown date mode '{mode}'")
+    else:
+        ctx.log(f"  date (calendar, by text) -> {d_from} .. {d_to}")
+        _text_calendar_pick(ctx, d_from)
+        _text_calendar_pick(ctx, d_to)
+    _click_apply_if_visible(ctx)
     page.keyboard.press("Escape")
-    page.wait_for_timeout(500)
-    _log_date_shown(ctx)
+    _verify_date_shown(ctx, expected)
+
+
+_CALENDAR_JS = (Path(__file__).parent / "calendar.js").read_text(encoding="utf-8")
+
+
+def _text_calendar(ctx: Context, d: dt.date) -> dict:
+    return ctx.page.evaluate(_CALENDAR_JS, [d.year, d.month, d.day])
+
+
+def _text_calendar_pick(ctx: Context, d: dt.date) -> None:
+    """Click day `d` in the open calendar popup, navigating months with its arrows."""
+    page = ctx.page
+    for _ in range(40):
+        res = _text_calendar(ctx, d)
+        if res.get("error"):
+            path = _dump_datepicker(ctx)
+            raise StepError(f"Calendar: cannot find {d} ({res['error']}, months shown: {res.get('shown')}). "
+                            f"Widget HTML saved to {path}")
+        if res.get("nav"):
+            page.mouse.click(res["x"], res["y"])
+            page.wait_for_timeout(300)
+            continue
+        if res["disabled"]:
+            raise StepError(f"Day {d} is not selectable in the calendar (outside the dashboard's date limits?)")
+        page.mouse.click(res["x"], res["y"])
+        page.wait_for_timeout(300)
+        return
+    raise StepError(f"Could not navigate the calendar to {d:%B %Y}")
+
+
+def _click_apply_if_visible(ctx: Context) -> None:
+    page = ctx.page
+    apply_css = ctx.config["date"]["calendar"].get("apply")
+    if apply_css:
+        _click_if_visible(page.locator(apply_css).first)
+    # Generic Apply/OK only while a calendar popup is still open (the dashboard's closes itself).
+    if not (_calendar_open(ctx) or _text_calendar(ctx, dt.date.today()).get("error") != "no-calendar"):
+        return
+    btn = page.get_by_role("button", name=re.compile(r"^\s*(apply|ok|aplicar|done|select)\s*$", re.I))
+    for b in _visible(btn):
+        b.click()
+        break
+
+
+def _verify_date_shown(ctx: Context, expected: str) -> None:
+    """Fail if the widget ends up showing a different range (avoids exporting the wrong period)."""
+    page = ctx.page
+    pattern = re.compile(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\s*-\s*\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
+    want = re.sub(r"\s+", "", expected)
+    shown = ""
+    for _ in range(12):
+        shown = _date_widget_text(ctx)
+        if want in re.sub(r"\s+", "", shown):
+            ctx.log(f"  date widget shows: '{shown}'")
+            return
+        page.wait_for_timeout(250)
+    m = pattern.search(shown)
+    if m:
+        raise StepError(f"Date widget shows '{m.group(0)}' instead of '{expected}'. "
+                        "Check date.input_format / the calendar selection")
+    ctx.log(f"  WARNING: could not read the selected range from the widget (shows '{shown[:80]}')")
+
+
+def _date_widget_text(ctx: Context) -> str:
+    try:
+        return ctx.page.evaluate(
+            """(sel) => { const el = document.querySelector(sel); if (!el) return '';
+                const vals = Array.from(el.querySelectorAll('input')).map(i => i.value).join(' ');
+                return (el.innerText + ' ' + vals).replace(/\\s+/g, ' ').trim(); }""",
+            ctx.sel["datepicker"])
+    except Exception:
+        return ""
 
 
 def _calendar_open(ctx: Context) -> bool:
     return bool(_visible(ctx.page.locator(ctx.config["date"]["calendar"]["title"])))
-
-
-def _log_date_shown(ctx: Context) -> None:
-    try:
-        shown = ctx.page.locator(ctx.sel["datepicker"]).first.inner_text().strip()
-        shown = shown or ctx.page.locator(ctx.sel["datepicker"] + " input").first.input_value()
-        ctx.log(f"  date widget now shows: '{' '.join(shown.split())[:80]}'")
-    except Exception:
-        pass
 
 
 def _visible(loc) -> list:
@@ -445,31 +500,36 @@ def _open_datepicker(ctx: Context) -> None:
     page.wait_for_timeout(800)
 
 
-def _find_date_inputs(ctx: Context, allow_calendar: bool = False) -> list | None:
-    """Visible date inputs: inside #datepicker, or in the popup opened by clicking it.
-
-    Returns None (auto mode) when there is no input but a calendar popup is open."""
+def _detect_date_widget(ctx: Context, allow_calendar: bool, prefer_calendar: bool = False):
+    """Returns ("inputs", [locators]) | ("css_calendar", None) | ("text_calendar", None)."""
     page = ctx.page
-    try:
-        page.locator(ctx.sel["datepicker_input"]).first.wait_for(state="visible", timeout=5_000)
-    except PWTimeout:
-        pass
-    inputs = _visible(page.locator(ctx.sel["datepicker_input"]))
-    if inputs:
-        return inputs
-    ctx.log("  no <input> inside the date widget -> clicking it to open the picker")
+    if not prefer_calendar:
+        if page.locator(ctx.sel["datepicker_input"]).count():
+            try:
+                page.locator(ctx.sel["datepicker_input"]).first.wait_for(state="visible", timeout=5_000)
+            except PWTimeout:
+                pass
+        inputs = _visible(page.locator(ctx.sel["datepicker_input"]))
+        if inputs:
+            return "inputs", inputs
+        ctx.log("  no <input> inside the date widget -> clicking it to open the picker")
     _open_datepicker(ctx)
-    inputs = _visible(page.locator(ctx.config["date"]["popup_inputs"]))
-    if inputs:
-        return inputs
-    if allow_calendar and _calendar_open(ctx):
-        ctx.log("  picker has no inputs -> using its calendar")
-        return None
+    if not prefer_calendar:
+        inputs = _visible(page.locator(ctx.config["date"]["popup_inputs"]))
+        if inputs:
+            return "inputs", inputs
+    if allow_calendar:
+        if _calendar_open(ctx):
+            return "css_calendar", None
+        probe = _text_calendar(ctx, dt.date.today())
+        if probe.get("error") != "no-calendar":
+            ctx.log(f"  calendar popup found (months shown: {', '.join(probe.get('shown', []))})")
+            return "text_calendar", None
     path = _dump_datepicker(ctx)
     raise StepError(
-        "Could not find a date input. The date widget's HTML was saved to "
-        f"{path}. Send that file to adjust selectors, or use `date.mode: calendar` "
-        "/ `set_date: {mode: skip}` to keep the dashboard's default range."
+        "Could not find a date input or calendar. The date widget's HTML was saved to "
+        f"{path}. Send that file to adjust selectors, or use `set_date: {{mode: skip}}` "
+        "to keep the dashboard's default range."
     )
 
 
