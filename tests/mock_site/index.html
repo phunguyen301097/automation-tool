@@ -65,12 +65,16 @@
     <div class="panelLoader d-none" id="loader">Loading...</div>
   </div>
   <div id="results" class="d-none">
+    <div class="btn-group"><button type="button">Download graph</button>
+      <div class="dropdown-menu"><a class="dropdown-item" href="#">As PNG</a><a class="dropdown-item" href="#">As PDF</a></div>
+    </div>
     <div id="tableProvinces">
       <div class="btn-group">
         <button type="button" id="dlBtn"><i class="fa fa-download"></i> Download table</button>
         <div class="dropdown-menu" id="dlMenu">
-          <a class="dropdown-item" href="#" data-format="xlsx">Excel (.xlsx)</a>
-          <a class="dropdown-item" href="#" data-format="csv">CSV</a>
+          <a class="dropdown-item" href="#" data-format="xlsx">As XLSX</a>
+          <a class="dropdown-item" href="#" data-format="json">As JSON</a>
+          <a class="dropdown-item" href="#" data-format="csv">As CSV</a>
         </div>
       </div>
       <table><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody></tbody></table>
@@ -98,13 +102,84 @@ $('#dropdownCountryChooser').addEventListener('change', e => {
 });
 
 let dateRange = null;
-$('#datepicker input').addEventListener('keydown', e => {
-  if (e.key !== 'Enter') return;
-  const m = e.target.value.match(/^(\d\d)\/(\d\d)\/(\d{4}) - (\d\d)\/(\d\d)\/(\d{4})$/);
-  if (!m) { e.target.value = ''; dateRange = null; return; }
-  dateRange = `${m[3]}-${m[1]}-${m[2]}..${m[6]}-${m[4]}-${m[5]}`;
-  markChanged();
-});
+// Date widget variants (?dp=...):
+//   (default) like the real dashboard: text "01-09-2026 - 25-09-2026", click opens a
+//             daterangepicker with two month calendars and an Apply button.
+//   input   : a text input taking "dd-mm-yyyy - dd-mm-yyyy" + Enter.
+//   popup   : text; click opens a popup with start/end inputs.
+//   none    : text; nothing usable opens.
+const dpMode = params.get('dp') || 'drp';
+const pad = n => String(n).padStart(2, '0');
+const dmy = d => `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
+const isoOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseDmy = v => { const m = v.trim().match(/^(\d\d)-(\d\d)-(\d{4})$/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
+const maxDate = new Date(2026, 8, 23);
+function setRange(a, b) { dateRange = `${a}..${b}`; markChanged(); }
+
+if (dpMode === 'input') {
+  $('#datepicker').innerHTML = '<input type="text" class="form-control" value="01-09-2026 - 23-09-2026">';
+  $('#datepicker input').addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const [a, b] = e.target.value.split(' - ').map(parseDmy);
+    if (a && b) setRange(a, b); else { e.target.value = ''; dateRange = null; }
+  });
+} else {
+  $('#datepicker').innerHTML = '<div class="form-control reportrange-text"><span>01-09-2026 - 23-09-2026</span></div>';
+  const text = $('#datepicker span');
+  $('#datepicker .reportrange-text').addEventListener('click', () => {
+    if ($('.daterangepicker') || dpMode === 'none') return;
+    if (dpMode === 'popup') {
+      document.body.insertAdjacentHTML('beforeend',
+        '<div class="daterangepicker"><input name="start"><input name="end"></div>');
+      $('.daterangepicker input[name=end]').addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        const a = parseDmy($('.daterangepicker input[name=start]').value), b = parseDmy(e.target.value);
+        if (a && b) setRange(a, b);
+      });
+      return;
+    }
+    // daterangepicker: left month shows `view`, right month shows view + 1.
+    let view = new Date(2026, 8, 1), start = null, end = null;
+    const pop = document.createElement('div');
+    pop.className = 'daterangepicker show-calendar';
+    document.body.appendChild(pop);
+    const monthName = d => d.toLocaleString('en-US', {month: 'short'}) + ' ' + d.getFullYear();
+    function calendar(side, first) {
+      let html = `<div class="drp-calendar ${side}"><table><thead><tr>` +
+        (side === 'left' ? '<th class="prev available">&lt;</th>' : '<th></th>') +
+        `<th class="month">${monthName(first)}</th>` +
+        (side === 'right' ? '<th class="next available">&gt;</th>' : '<th></th>') + '</tr></thead><tbody><tr>';
+      const d = new Date(first); d.setDate(1 - first.getDay());
+      for (let i = 0; i < 42; i++) {
+        const off = d.getMonth() !== first.getMonth(), disabled = d > maxDate;
+        const cls = off || disabled ? 'off' + (disabled ? ' disabled' : '') : 'available';
+        html += `<td class="${cls}" data-date="${isoOf(d)}">${d.getDate()}</td>`;
+        if (i % 7 === 6) html += '</tr><tr>';
+        d.setDate(d.getDate() + 1);
+      }
+      return html + '</tr></tbody></table></div>';
+    }
+    function render() {
+      pop.innerHTML = calendar('left', view) + calendar('right', new Date(view.getFullYear(), view.getMonth() + 1, 1)) +
+        '<div class="drp-buttons"><button class="cancelBtn">Cancel</button><button class="applyBtn">Apply</button></div>';
+      pop.querySelector('.prev').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() - 1, 1); render(); };
+      pop.querySelector('.next').onclick = () => { view = new Date(view.getFullYear(), view.getMonth() + 1, 1); render(); };
+      pop.querySelectorAll('td.available').forEach(td => td.onclick = () => {
+        if (!start || end) { start = td.dataset.date; end = null; } else { end = td.dataset.date; }
+      });
+      pop.querySelector('.applyBtn').onclick = () => {
+        if (start && end) {
+          setRange(start, end);
+          const f = s => s.split('-').reverse().join('-');
+          text.textContent = `${f(start)} - ${f(end)}`;
+        }
+        pop.remove();
+      };
+      pop.querySelector('.cancelBtn').onclick = () => pop.remove();
+    }
+    render();
+  });
+}
 
 let hasResults = false;
 function markChanged() { if (hasResults) $('#updateButtonRow').classList.remove('d-none'); }

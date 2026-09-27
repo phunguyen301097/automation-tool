@@ -7,6 +7,8 @@ Usage: weplan-export [-c config.yaml] <command> [options]
 Commands:
   login                         open a browser, log in manually and save the session
   install-browser               download Playwright's Chromium (not needed with browser.channel: chrome)
+  inspect [--headed] [--view macro]
+                                save rendered HTML + screenshots of the date widget and result table
   run [files...]                run scenarios (default: scenarios/*.yaml)
       -k, --only <glob>         only scenarios whose name matches (repeatable)
       -t, --tag <tag>           only scenarios with this tag (repeatable)
@@ -38,6 +40,7 @@ var only = new List<string>();
 var tags = new List<string>();
 bool headed = false, trace = false, stopOnFail = false, dryRun = false;
 int? slowMo = null;
+var view = "macro";
 for (var i = 1; i < rest.Count; i++)
 {
     switch (rest[i])
@@ -49,6 +52,7 @@ for (var i = 1; i < rest.Count; i++)
         case "--trace": trace = true; break;
         case "-x" or "--stop-on-fail": stopOnFail = true; break;
         case "--dry-run": dryRun = true; break;
+        case "--view": view = rest[++i]; break;
         default: files.Add(rest[i]); break;
     }
 }
@@ -61,6 +65,10 @@ try
     {
         case "login":
             await Runner.InteractiveLoginAsync(config);
+            return 0;
+
+        case "inspect":
+            await Runner.InspectAsync(config, headed, view);
             return 0;
 
         case "install-browser":

@@ -223,4 +223,97 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Assert.False(r.Ok);
         Assert.Contains("No date selected", r.Error);
     }
+
+    [Fact]
+    public async Task DateWidgetWithoutInput_UsesPopupInputs()
+    {
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: popup_date
+                steps:
+                  - goto: /app/bi/coverage?dp=popup
+                  - set_date: {from: 2026-08-01, to: 2026-08-31}
+                  - choose_view: macro
+                  - wait_for_table: {}
+                  - download_table: {format: csv}
+            """, Config());
+
+        var r = Assert.Single(results);
+        Assert.True(r.Ok, r.Error);
+        Assert.Contains("date,2026-08-01..2026-08-31", File.ReadAllText(r.Downloads[0].File));
+    }
+
+    [Fact]
+    public async Task DateTextInputVariant_And_JsonExport()
+    {
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: input_date
+                steps:
+                  - goto: /app/bi/coverage?dp=input
+                  - set_date: {from: 2026-07-15, to: 2026-08-02}
+                  - choose_view: macro
+                  - wait_for_table: {}
+                  - download_table: {format: json}
+            """, Config());
+
+        var r = Assert.Single(results);
+        Assert.True(r.Ok, r.Error);
+        Assert.EndsWith(".json", r.Downloads[0].File);
+        Assert.Contains("date,2026-07-15..2026-08-02", File.ReadAllText(r.Downloads[0].File));
+    }
+
+    [Fact]
+    public async Task UnknownDateWidget_DumpsHtml()
+    {
+        var config = Config();
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: unknown_date
+                steps:
+                  - goto: /app/bi/coverage?dp=none
+                  - set_date: {from: 2026-08-01, to: 2026-08-31}
+            """, config);
+
+        var r = Assert.Single(results);
+        Assert.False(r.Ok);
+        var dump = Path.Combine(config.OutputDir, "_debug", "datepicker_unknown_date.html");
+        Assert.Contains(dump, r.Error);
+        Assert.Contains("reportrange-text", File.ReadAllText(dump));
+    }
+
+    [Fact]
+    public async Task CalendarDayAfterMaxDate_FailsClearly()
+    {
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: future_date
+                steps:
+                  - goto: /app/bi/coverage
+                  - set_date: {from: 2026-09-01, to: 2026-09-25}
+            """, Config());
+
+        var r = Assert.Single(results);
+        Assert.False(r.Ok);
+        Assert.Contains("2026-09-25 is not selectable", r.Error);
+    }
+
+    [Fact]
+    public async Task ManualDownload_IsKept()
+    {
+        var config = Config();
+        using var pw = await Microsoft.Playwright.Playwright.CreateAsync();
+        await using var browser = await Runner.LaunchBrowserAsync(pw, config);
+        var ctx = await Runner.NewContextAsync(browser, config, useState: false);
+        Runner.KeepManualDownloads(ctx, config);
+        var page = await ctx.NewPageAsync();
+        await page.GotoAsync(_server.BaseUrl + "/app/bi/coverage");
+        var download = await page.RunAndWaitForDownloadAsync(() => page.EvaluateAsync(
+            "u => { const a = document.createElement('a'); a.href = u; document.body.appendChild(a); a.click(); }",
+            _server.BaseUrl + "/export?format=csv&x=1"));
+        await download.PathAsync();
+        await page.WaitForTimeoutAsync(500);
+        await ctx.CloseAsync();
+        Assert.True(File.Exists(Path.Combine(config.OutputDir, "manual", "table_export.csv")));
+    }
 }

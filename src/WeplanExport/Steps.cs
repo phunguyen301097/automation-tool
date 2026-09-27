@@ -38,7 +38,7 @@ public static class Steps
         Register(SelectCountryAsync, "Select country by name (Cambodia) or code (kh)", "select_country", "country");
         Register(SelectFilterAsync, "{id: carrier_filter, options: [ECONET], clear: true, mode: js|ui}", "select_filter", "select", "filter");
         Register(FiltersAsync, "Several filters at once: {carrier_filter: [ECONET], coverage_filter: [\"4G\"]}", "filters");
-        Register(SetDateAsync, "{from: 2026-08-01, to: 2026-08-31, mode: input|calendar|preset, preset: \"Last 30 days\"}", "set_date", "date");
+        Register(SetDateAsync, "{from: 2026-08-01, to: 2026-08-31, mode: auto|input|calendar|preset|skip, preset: \"Last 30 days\"}", "set_date", "date");
         Register(ApplyAsync, "Click \"Parameters changed...\" if it is visible", "apply", "run_query");
         Register(ChooseViewAsync, "Click a visualization card: macro | population_range | admin_1 | '#byCountry' | {text: 'Macro data'}", "choose_view", "view");
         Register(WaitForTableAsync, "Wait until results are shown and the table has rows: {min_rows: 1, timeout: 300000}", "wait_for_table", "wait_data");
@@ -306,14 +306,19 @@ public static class Steps
         var a = Args.Map(args, "from");
         var page = ctx.Page;
         var dcfg = ctx.Config.Date;
+        var cal = dcfg.Calendar;
         var mode = a.Get("mode") ?? (a.ContainsKey("preset") ? "preset" : dcfg.Mode);
+        if (mode == "skip")
+        {
+            ctx.Log("  date: skipped, using the dashboard's current range");
+            return;
+        }
         await page.WaitForSelectorAsync(ctx.Sel.Datepicker, new() { State = WaitForSelectorState.Attached, Timeout = ctx.Timeouts.Default });
-        var input = page.Locator(ctx.Sel.DatepickerInput).First;
 
         if (mode == "preset")
         {
             ctx.Log($"  date preset -> {a.Get("preset")}");
-            await input.ClickAsync();
+            await OpenDatepickerAsync(ctx);
             await page.GetByText(TextRegex(a.Get("preset")!, exact: true)).First.ClickAsync();
             return;
         }
@@ -327,37 +332,189 @@ public static class Steps
         ctx.Vars["date_from"] = from.ToString("yyyy-MM-dd");
         ctx.Vars["date_to"] = to.ToString("yyyy-MM-dd");
 
-        if (mode == "input")
+        var fmt = a.Get("input_format") ?? dcfg.InputFormat;
+        var sep = a.Get("range_separator") ?? dcfg.RangeSeparator;
+        string F(DateOnly d) => d.ToString(fmt, CultureInfo.InvariantCulture);
+
+        if (mode is "auto" or "input")
         {
-            var fmt = a.Get("input_format") ?? dcfg.InputFormat;
-            var sep = a.Get("range_separator") ?? dcfg.RangeSeparator;
-            var text = from.ToString(fmt, CultureInfo.InvariantCulture) + sep + to.ToString(fmt, CultureInfo.InvariantCulture);
-            ctx.Log($"  date -> '{text}'");
-            await input.ClickAsync();
-            await input.PressAsync("Control+A");
-            await input.PressAsync("Delete");
-            await input.PressSequentiallyAsync(text, new() { Delay = 20 });
-            await input.PressAsync("Enter");
-            await page.Keyboard.PressAsync("Escape");
-            await page.WaitForTimeoutAsync(300);
-            var shown = await input.InputValueAsync();
-            if (shown.Replace(" ", "") != text.Replace(" ", ""))
-                ctx.Log($"  WARNING: date input now shows '{shown}' (expected '{text}'). " +
-                        "Check date.input_format in config.yaml or use mode: calendar");
+            var inputs = await FindDateInputsAsync(ctx, allowCalendar: mode == "auto");
+            if (inputs is null)
+            {
+                mode = "calendar"; // auto: no input anywhere, but a calendar popup is open
+            }
+            else
+            {
+                if (inputs.Count >= 2)
+                {
+                    // Separate start / end inputs.
+                    ctx.Log($"  date -> start '{F(from)}', end '{F(to)}'");
+                    await TypeIntoAsync(inputs[0], F(from));
+                    await TypeIntoAsync(inputs[1], F(to));
+                }
+                else
+                {
+                    var text = F(from) + sep + F(to);
+                    ctx.Log($"  date -> '{text}'");
+                    await TypeIntoAsync(inputs[0], text);
+                    var shown = await inputs[0].InputValueAsync();
+                    if (shown.Replace(" ", "") != text.Replace(" ", ""))
+                        ctx.Log($"  WARNING: date input now shows '{shown}' (expected '{text}'). " +
+                                "Check date.input_format in config.yaml or use mode: calendar");
+                }
+                if (cal.Apply is { } apply) await ClickIfVisibleAsync(page.Locator(apply).First);
+            }
         }
-        else if (mode == "calendar")
+        if (mode == "calendar")
         {
             ctx.Log($"  date (calendar) -> {from:yyyy-MM-dd} .. {to:yyyy-MM-dd}");
-            await input.ClickAsync();
+            if (!await CalendarOpenAsync(ctx)) await OpenDatepickerAsync(ctx);
             await CalendarPickAsync(ctx, from);
             await CalendarPickAsync(ctx, to);
-            if (dcfg.Calendar.Apply is { } apply) await page.Locator(apply).First.ClickAsync();
-            await page.Keyboard.PressAsync("Escape");
+            if (cal.Apply is { } apply) await ClickIfVisibleAsync(page.Locator(apply).First);
         }
-        else
+        else if (mode is not ("auto" or "input"))
         {
             throw new StepException($"Unknown date mode '{mode}'");
         }
+        await page.Keyboard.PressAsync("Escape");
+        await page.WaitForTimeoutAsync(500);
+        await LogDateShownAsync(ctx);
+    }
+
+    private static async Task<List<ILocator>> VisibleAsync(ILocator loc)
+    {
+        var result = new List<ILocator>();
+        var n = await loc.CountAsync();
+        for (var i = 0; i < n; i++)
+        {
+            try
+            {
+                if (await loc.Nth(i).IsVisibleAsync()) result.Add(loc.Nth(i));
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+        return result;
+    }
+
+    private static async Task ClickIfVisibleAsync(ILocator loc)
+    {
+        try
+        {
+            if (await loc.CountAsync() > 0 && await loc.IsVisibleAsync()) await loc.ClickAsync();
+        }
+        catch (PlaywrightException)
+        {
+        }
+    }
+
+    private static async Task TypeIntoAsync(ILocator input, string text)
+    {
+        await input.ClickAsync();
+        await input.PressAsync("Control+A");
+        await input.PressAsync("Delete");
+        await input.PressSequentiallyAsync(text, new() { Delay = 20 });
+        await input.PressAsync("Enter");
+    }
+
+    /// <summary>Click whatever the date widget renders (input, button or text).</summary>
+    private static async Task OpenDatepickerAsync(StepContext ctx)
+    {
+        var page = ctx.Page;
+        var inside = await VisibleAsync(page.Locator(ctx.Sel.DatepickerInput));
+        if (inside.Count > 0)
+        {
+            await inside[0].ClickAsync();
+        }
+        else
+        {
+            var root = page.Locator(ctx.Sel.Datepicker).First;
+            var clickable = await VisibleAsync(root.Locator("input, button, [role=button], [tabindex], .form-control, div, span"));
+            await (clickable.Count > 0 ? clickable[0] : root).ClickAsync();
+        }
+        await page.WaitForTimeoutAsync(800);
+    }
+
+    private static async Task<bool> CalendarOpenAsync(StepContext ctx) =>
+        (await VisibleAsync(ctx.Page.Locator(ctx.Config.Date.Calendar.Title))).Count > 0;
+
+    /// <summary>
+    /// Visible date inputs: inside #datepicker, or in the popup opened by clicking it.
+    /// Returns null (auto mode) when there is no input but a calendar popup is open.
+    /// </summary>
+    private static async Task<List<ILocator>?> FindDateInputsAsync(StepContext ctx, bool allowCalendar)
+    {
+        var page = ctx.Page;
+        try
+        {
+            await page.Locator(ctx.Sel.DatepickerInput).First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5_000 });
+        }
+        catch (TimeoutException)
+        {
+        }
+        var inputs = await VisibleAsync(page.Locator(ctx.Sel.DatepickerInput));
+        if (inputs.Count > 0) return inputs;
+        ctx.Log("  no <input> inside the date widget -> clicking it to open the picker");
+        await OpenDatepickerAsync(ctx);
+        inputs = await VisibleAsync(page.Locator(ctx.Config.Date.PopupInputs));
+        if (inputs.Count > 0) return inputs;
+        if (allowCalendar && await CalendarOpenAsync(ctx))
+        {
+            ctx.Log("  picker has no inputs -> using its calendar");
+            return null;
+        }
+        var path = await DumpDatepickerAsync(ctx);
+        throw new StepException("Could not find a date input. The date widget's HTML was saved to " +
+                                $"{path}. Send that file to adjust selectors, or use `date.mode: calendar` " +
+                                "/ `set_date: {mode: skip}` to keep the dashboard's default range.");
+    }
+
+    private static async Task<string> DumpDatepickerAsync(StepContext ctx)
+    {
+        var html = await ctx.Page.EvaluateAsync<string>(@"(sel) => {
+            const parts = [];
+            const root = document.querySelector(sel);
+            parts.push('<!-- ' + sel + ' -->\n' + (root ? root.outerHTML : 'NOT FOUND'));
+            // Popups are often appended to <body>; keep the visible ones.
+            for (const el of document.body.children) {
+                const r = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                if (r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+                    && /picker|calendar|popover|dropdown|dialog|overlay|menu/i.test(el.className + ' ' + el.id)) {
+                    parts.push('<!-- body > ' + el.tagName + '.' + el.className + ' -->\n' + el.outerHTML);
+                }
+            }
+            return parts.join('\n\n');
+        }", ctx.Sel.Datepicker);
+        var path = Path.Combine(ctx.OutputDir, "_debug", $"datepicker_{Safe(ctx.Scenario.Name)}.html");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        await File.WriteAllTextAsync(path, html);
+        await ctx.Page.ScreenshotAsync(new() { Path = Path.ChangeExtension(path, ".png"), FullPage = true });
+        return path;
+    }
+
+    private static async Task LogDateShownAsync(StepContext ctx)
+    {
+        try
+        {
+            var shown = (await ctx.Page.Locator(ctx.Sel.Datepicker).First.InnerTextAsync()).Trim();
+            if (shown.Length == 0) shown = await ctx.Page.Locator(ctx.Sel.Datepicker + " input").First.InputValueAsync(new() { Timeout = 2000 });
+            shown = Regex.Replace(shown, @"\s+", " ");
+            ctx.Log($"  date widget now shows: '{(shown.Length > 80 ? shown[..80] : shown)}'");
+        }
+        catch (Exception)
+        {
+            // informational only
+        }
+    }
+
+    private static DateOnly? ParseMonthTitle(string title)
+    {
+        title = Regex.Replace(title, @"\s+", " ").Trim();
+        return DateOnly.TryParseExact(title, new[] { "MMMM yyyy", "MMM yyyy", "MM/yyyy", "yyyy-MM" }, CultureInfo.InvariantCulture,
+            DateTimeStyles.AllowWhiteSpaces, out var d) ? new DateOnly(d.Year, d.Month, 1) : null;
     }
 
     private static async Task CalendarPickAsync(StepContext ctx, DateOnly d)
@@ -367,19 +524,23 @@ public static class Steps
         var target = new DateOnly(d.Year, d.Month, 1);
         for (var i = 0; ; i++)
         {
-            if (i > 36) throw new StepException($"Could not navigate calendar to {d:MMMM yyyy}");
-            var title = Regex.Replace(await page.Locator(cal.Title).First.InnerTextAsync(), @"\s+", " ").Trim();
-            if (DateOnly.TryParseExact(title, new[] { "MMMM yyyy", "MMM yyyy" }, CultureInfo.InvariantCulture,
-                    DateTimeStyles.AllowWhiteSpaces, out var shown) && shown == target)
-                break;
-            if (title.Contains(d.ToString("MMMM", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase)
-                && title.Contains(d.Year.ToString()))
-                break;
-            var goNext = shown == default || shown < target;
-            await page.Locator(goNext ? cal.Next : cal.Prev).First.ClickAsync();
-            await page.WaitForTimeoutAsync(150);
+            if (i >= 40) throw new StepException($"Could not navigate calendar to {target:MMMM yyyy}");
+            var titles = await VisibleAsync(page.Locator(cal.Title));
+            if (titles.Count == 0) throw new StepException("Calendar popup is not open (date.calendar.title matched nothing visible)");
+            var raw = await titles[0].InnerTextAsync();
+            var shown = ParseMonthTitle(raw) ?? throw new StepException($"Cannot read calendar month from '{raw.Trim()}'");
+            if (shown == target) break;
+            var nav = await VisibleAsync(page.Locator(shown < target ? cal.Next : cal.Prev));
+            if (nav.Count == 0)
+                throw new StepException($"Cannot move calendar from {shown:MMM yyyy} to {target:MMM yyyy} (outside date limits?)");
+            await nav[0].ClickAsync();
+            await page.WaitForTimeoutAsync(200);
         }
-        await page.Locator(cal.Day).Filter(new() { HasTextRegex = TextRegex(d.Day.ToString(), exact: true) }).First.ClickAsync();
+        var days = await VisibleAsync(page.Locator(cal.Day).Filter(new() { HasTextRegex = TextRegex(d.Day.ToString(), exact: true) }));
+        if (days.Count == 0)
+            throw new StepException($"Day {d:yyyy-MM-dd} is not selectable in the calendar (outside the dashboard's date limits?)");
+        await days[0].ClickAsync();
+        await page.WaitForTimeoutAsync(200);
     }
 
     // ------------------------------------------------------------------ query / results
@@ -410,7 +571,20 @@ public static class Steps
                 : page.Locator(".chartModeSelector").Filter(new() { HasTextRegex = TextRegex(key) }).First;
             label = key;
         }
-        await loc.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = ctx.Timeouts.DataLoad });
+        try
+        {
+            await loc.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 15_000 });
+        }
+        catch (TimeoutException)
+        {
+            // The dashboard may already show results (e.g. restored last query): the cards are hidden then.
+            if (await page.Locator(ctx.Sel.Results).First.IsVisibleAsync())
+            {
+                ctx.Log($"  view cards hidden, results already shown -> keeping current view (wanted {label})");
+                return;
+            }
+            await loc.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = ctx.Timeouts.DataLoad });
+        }
         ctx.Log($"  view -> {label}");
         await loc.ClickAsync();
         if (a.Get("municipality") is { } muni)
@@ -445,13 +619,16 @@ public static class Steps
 
     // ------------------------------------------------------------------ download
 
+    /// <summary>Menu items of "Download table": As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG.</summary>
     private static readonly Dictionary<string, string> FormatText = new()
     {
-        ["xlsx"] = "excel|xlsx",
-        ["xls"] = "excel|xls",
-        ["csv"] = "csv",
-        ["json"] = "json",
-        ["pdf"] = "pdf",
+        ["xlsx"] = @"^\s*As XLSX\s*$|excel|xlsx",
+        ["xls"] = @"^\s*As XLS\s*$|excel",
+        ["csv"] = @"^\s*As CSV\s*$",
+        ["json"] = @"^\s*As JSON\s*$",
+        ["pdf"] = @"^\s*As PDF\s*$",
+        ["txt"] = @"^\s*As TXT\s*$",
+        ["png"] = @"^\s*As PNG\s*$",
     };
 
     public static async Task DownloadTableAsync(StepContext ctx, object? args)

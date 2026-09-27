@@ -132,15 +132,29 @@ Device (`manufacturer_filter`, `brand_filter`, `model_filter`...), Wi‑Fi (`wif
 Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript chạy). Hai phần do JavaScript vẽ ra sau nên
 **cần xác nhận trên web thật ở lần chạy đầu**:
 
-1. **Ô chọn ngày** (`#datepicker`). Mặc định tool gõ `MM/dd/yyyy - MM/dd/yyyy` vào ô input. Log sẽ in
-   `WARNING: date input now shows ...` nếu trang không nhận định dạng đó. Khi đó:
-   - đổi `date.input_format` (định dạng ngày kiểu .NET, ví dụ `dd/MM/yyyy`) / `date.range_separator` trong `config.yaml`, hoặc
-   - dùng `date.mode: calendar` (bấm từng ngày trên lịch; selector của lịch nằm trong `date.calendar`), hoặc
-   - nếu có nút preset: `set_date: {preset: "Last 30 days"}`.
-2. **Nút "Download table" và menu chọn loại file**. Tool tìm nút có chữ `Download table` trong `#tableProvinces`.
-   Sau khi bấm, nếu hiện menu thì chọn mục khớp `Excel|xlsx` hoặc `CSV`, còn nếu trình duyệt tải về ngay thì
-   dùng luôn file đó. Nếu chữ trên web khác thì chỉnh `download_button_text`, hoặc `format_text` trong bước
-   `download_table`.
+1. **Ô chọn ngày** (`#datepicker`, hiển thị `01-09-2026 - 25-09-2026`). Với `date.mode: auto` (mặc định),
+   tool gõ vào ô nhập nếu có; nếu không có thì bấm mở popup, điền ô nhập trong popup, hoặc bấm ngày bắt đầu và
+   kết thúc trên lịch 2 tháng (kiểu daterangepicker) rồi bấm Apply. Log in ra `date widget now shows: ...` để
+   kiểm tra. Nếu không tìm được, HTML của ô ngày được lưu vào `downloads/_debug/`. Nếu vẫn không khớp:
+   - chỉnh `date.calendar` (selector tiêu đề tháng, nút prev/next, ô ngày, nút Apply) trong `config.yaml`, hoặc
+   - đổi `date.input_format` (kiểu .NET, mặc định `dd-MM-yyyy`) / `date.range_separator`, hoặc
+   - `set_date: {mode: skip}` để giữ khoảng ngày mặc định của dashboard.
+2. **Nút "Download table" và menu chọn loại file** (`As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG`).
+   `format: xlsx|json|csv|pdf|txt|png` chọn đúng mục tương ứng. Nếu chữ trên web khác thì chỉnh
+   `download_button_text`, hoặc `format_text` trong bước `download_table`.
+
+**Lệnh `inspect`**: mở dashboard bằng session đã lưu, rồi ghi HTML (đã render) và ảnh chụp của: toàn trang,
+ô chọn ngày, trang sau khi mở ô ngày, vùng kết quả sau khi bấm Macro data, và menu "Download table":
+
+```bash
+weplan-export inspect            # thêm --headed để xem trình duyệt
+```
+
+Kết quả nằm ở `downloads/_inspect/<thời gian>/`. Nén thư mục đó gửi lại là đủ để chỉnh selector.
+
+**File tải tay trong cửa sổ do tool mở**: Playwright lưu file tải về dưới tên dạng GUID trong thư mục tạm và xóa
+khi đóng trình duyệt. Trong lệnh `login` và `inspect`, file bạn tự bấm tải được lưu vào `downloads/manual/` với
+tên gốc. Khi chạy `run`, file được lưu theo `filename` của bước `download_table`.
 
 Cách tìm selector đúng trên web thật:
 

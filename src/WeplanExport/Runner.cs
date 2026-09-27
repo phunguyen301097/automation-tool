@@ -116,6 +116,7 @@ public static class Runner
         using var pw = await Playwright.CreateAsync();
         await using var browser = await LaunchBrowserAsync(pw, config, headed: true);
         var ctx = await NewContextAsync(browser, config, useState: false);
+        KeepManualDownloads(ctx, config);
         var page = await ctx.NewPageAsync();
         await page.GotoAsync(config.BaseUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded });
         Log("Log in in the opened browser window, wait until the dashboard is shown,");
@@ -124,6 +125,104 @@ public static class Runner
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(config.Auth.StorageState))!);
         await ctx.StorageStateAsync(new() { Path = config.Auth.StorageState });
         Log($"Session saved to {config.Auth.StorageState}");
+    }
+
+    /// <summary>
+    /// Playwright stores downloads under a temp GUID name and deletes them when the browser
+    /// closes. Save files downloaded by hand in a tool-opened window instead.
+    /// </summary>
+    public static void KeepManualDownloads(IBrowserContext ctx, AppConfig config)
+    {
+        var target = Path.Combine(config.OutputDir, "manual");
+
+        void OnPage(IPage page) => page.Download += async (_, download) =>
+        {
+            Directory.CreateDirectory(target);
+            var path = Path.Combine(target, download.SuggestedFilename);
+            await download.SaveAsAsync(path);
+            Log($"Saved manual download -> {path}");
+        };
+
+        foreach (var p in ctx.Pages) OnPage(p);
+        ctx.Page += (_, p) => OnPage(p);
+    }
+
+    /// <summary>Dump the rendered DOM of the date widget and the result table to help tune selectors.</summary>
+    public static async Task<string> InspectAsync(AppConfig config, bool headed, string view)
+    {
+        var outDir = Path.Combine(config.OutputDir, "_inspect", DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+        Directory.CreateDirectory(outDir);
+        var sel = config.Selectors;
+
+        using var pw = await Playwright.CreateAsync();
+        await using var browser = await LaunchBrowserAsync(pw, config, headed);
+        var ctx = await NewContextAsync(browser, config);
+        KeepManualDownloads(ctx, config);
+        var page = await ctx.NewPageAsync();
+
+        async Task Dump(string name, string? css = null)
+        {
+            var html = css is null
+                ? await page.ContentAsync()
+                : await page.EvaluateAsync<string>(
+                    "(s) => Array.from(document.querySelectorAll(s)).map(e => e.outerHTML).join('\\n\\n') || 'NOT FOUND'", css);
+            await File.WriteAllTextAsync(Path.Combine(outDir, name + ".html"), html);
+            await page.ScreenshotAsync(new() { Path = Path.Combine(outDir, name + ".png"), FullPage = true });
+            Log($"  wrote {Path.Combine(outDir, name)}.html/.png");
+        }
+
+        if (config.Auth.Required) await EnsureSessionAsync(page, config);
+        else await page.GotoAsync(config.BaseUrl.TrimEnd('/') + config.StartPath);
+        try
+        {
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle, new() { Timeout = 20_000 });
+        }
+        catch (TimeoutException)
+        {
+        }
+        await page.WaitForTimeoutAsync(3000);
+        await Dump("1_page");
+        await Dump("2_datepicker", sel.Datepicker);
+        // Open the date widget and capture whatever popup appears.
+        try
+        {
+            var root = page.Locator(sel.Datepicker).First;
+            var clickable = root.Locator("input, button, [role=button], .form-control, div, span");
+            await (await clickable.CountAsync() > 0 ? clickable.First : root).ClickAsync();
+            await page.WaitForTimeoutAsync(1500);
+            await Dump("3_page_datepicker_open");
+            await page.Keyboard.PressAsync("Escape");
+        }
+        catch (Exception e)
+        {
+            Log($"  could not open date widget: {e.Message}");
+        }
+        // Load the result table and capture the area around "Download table".
+        try
+        {
+            var sctx = new StepContext(page, config, new Scenario { Name = "inspect", Steps = new() }, outDir, Log);
+            await Steps.ChooseViewAsync(sctx, view);
+            await Steps.WaitForTableAsync(sctx, null);
+            await Dump("4_results", sel.Results);
+            var btn = page.Locator("button, a, [role=button]").Filter(new() { HasText = sel.DownloadButtonText }).First;
+            if (await btn.CountAsync() > 0)
+            {
+                await btn.ClickAsync();
+                await page.WaitForTimeoutAsync(1500);
+                await Dump("5_download_menu_open");
+            }
+            else
+            {
+                Log($"  button '{sel.DownloadButtonText}' not found");
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"  could not load results: {e.Message}");
+            await Dump("4_page_error");
+        }
+        Log($"Done. Send the folder {outDir} (zip) to adjust selectors.");
+        return outDir;
     }
 
     public static async Task<List<ScenarioResult>> RunAsync(List<Scenario> scenarios, AppConfig config, RunOptions opts)
