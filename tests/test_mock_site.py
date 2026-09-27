@@ -276,3 +276,55 @@ def test_daterangepicker_variant(tmp_path, config):
     r = _run(tmp_path, config, doc)[0]
     assert r.ok, r.error
     assert "date,2026-08-03..2026-09-14" in Path(r.downloads[0]["file"]).read_text()
+
+
+SESSION_MARK = "() => sessionStorage.setItem('mark', '1')"
+SESSION_CHECK = "() => { if (sessionStorage.getItem('mark') !== '1') throw new Error('not the same page'); }"
+
+
+def _two_scenarios():
+    return {"scenarios": [
+        {"name": "first", "steps": [{"goto": "/app/bi/coverage"}, {"js": SESSION_MARK}]},
+        {"name": "second", "steps": [{"open_menu": ["Coverage time"]}, {"js": SESSION_CHECK}]},
+    ]}
+
+
+def test_scenarios_share_one_page_by_default(tmp_path, config):
+    results = _run(tmp_path, config, _two_scenarios())
+    assert [r.status for r in results] == ["PASS", "PASS"], [r.error for r in results]
+
+
+def test_isolated_mode_uses_fresh_page(tmp_path, config):
+    config["browser"]["isolated"] = True
+    results = _run(tmp_path, config, _two_scenarios())
+    assert [r.status for r in results] == ["PASS", "FAIL"]
+    assert "not the same page" in results[1].error
+
+
+def test_closing_the_browser_window_stops_the_run(tmp_path, config, monkeypatch):
+    from weplan_export import actions
+    monkeypatch.setitem(actions.STEPS, "user_closes_window", lambda ctx, args: ctx.page.close())
+    doc = {"scenarios": [
+        {"name": "a", "steps": [{"goto": "/app/bi/coverage"}]},
+        {"name": "b", "steps": [{"goto": "/app/bi/coverage"}, {"user_closes_window": None}, {"wait": 100}]},
+        {"name": "c", "steps": [{"goto": "/app/bi/coverage"}]},
+        {"name": "d", "steps": [{"goto": "/app/bi/coverage"}]},
+    ]}
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["PASS", "STOPPED", "NOT RUN", "NOT RUN"]
+    assert "window was closed" in results[1].error
+
+
+def test_ctrl_c_stops_the_run(tmp_path, config, monkeypatch):
+    from weplan_export import actions
+
+    def ctrl_c(ctx, args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setitem(actions.STEPS, "ctrl_c", ctrl_c)
+    doc = {"scenarios": [
+        {"name": "a", "steps": [{"goto": "/app/bi/coverage"}, {"ctrl_c": None}]},
+        {"name": "b", "steps": [{"goto": "/app/bi/coverage"}]},
+    ]}
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["STOPPED", "NOT RUN"]

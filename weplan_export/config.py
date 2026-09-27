@@ -30,6 +30,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "browser": {
         "headless": True,
+        # False: all scenarios share one page. True: fresh context per scenario (--isolated).
+        "isolated": False,
         "channel": None,  # "chrome" / "msedge" to use an installed browser
         "executable_path": None,
         "slow_mo": 0,

@@ -20,6 +20,7 @@ class Result:
     scenario: str
     ok: bool
     seconds: float
+    status: str = ""  # PASS | FAIL | STOPPED | NOT RUN
     downloads: list[dict] = field(default_factory=list)
     error: str | None = None
     failed_step: str | None = None
@@ -203,28 +204,86 @@ def inspect_page(config: dict, headed: bool = False, view: str = "macro") -> Pat
     return out
 
 
+class _RunState:
+    """Tracks whether the user closed the browser / pressed Ctrl+C, to stop the whole run."""
+
+    def __init__(self):
+        self.stop_reason: str | None = None
+        self.closing = False  # True while the tool itself closes pages/contexts
+
+    def watch_page(self, page) -> None:
+        page.on("close", lambda _: self._closed("the browser window was closed"))
+
+    def watch_browser(self, browser) -> None:
+        browser.on("disconnected", lambda _: self._closed("the browser was closed"))
+
+    def _closed(self, reason: str) -> None:
+        if not self.closing and not self.stop_reason:
+            self.stop_reason = reason
+
+
+_FIRST_NAV_STEPS = {"goto", "open_menu", "menu"}
+
+
 def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None = None,
-                  slow_mo: int | None = None, trace: bool = False, stop_on_fail: bool = False) -> list[Result]:
+                  slow_mo: int | None = None, trace: bool = False, stop_on_fail: bool = False,
+                  isolated: bool | None = None) -> list[Result]:
+    """Run scenarios one after another.
+
+    By default all scenarios share one browser page (one window with --headed, a single
+    login check). isolated=True gives each scenario a fresh context instead. Closing the
+    browser window or pressing Ctrl+C stops the whole run; remaining scenarios are reported
+    as NOT RUN.
+    """
+    if isolated is None:
+        isolated = bool(config["browser"].get("isolated", False))
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_root = Path(config["output_dir"])
     artifacts_dir = out_root / "_runs" / run_id
     results: list[Result] = []
+    state = _RunState()
 
-    with sync_playwright() as pw:
+    pw = sync_playwright().start()
+    browser = ctx = page = None
+    try:
         browser = launch_browser(pw, config, headed=headed, slow_mo=slow_mo)
-        for idx, sc in enumerate(scenarios, 1):
-            log(f"=== [{idx}/{len(scenarios)}] {sc.name}")
+        state.watch_browser(browser)
+        if not isolated:
             ctx = new_context(browser, config)
             if trace:
                 ctx.tracing.start(screenshots=True, snapshots=True, sources=False)
             page = ctx.new_page()
+            state.watch_page(page)
+        session_checked = False
+        previous_failed = False
+
+        for idx, sc in enumerate(scenarios, 1):
+            if state.stop_reason:
+                results.append(Result(scenario=sc.name, ok=False, seconds=0, status="NOT RUN"))
+                continue
+            log(f"=== [{idx}/{len(scenarios)}] {sc.name}")
+            if isolated:
+                ctx = new_context(browser, config)
+                if trace:
+                    ctx.tracing.start(screenshots=True, snapshots=True, sources=False)
+                page = ctx.new_page()
+                state.watch_page(page)
+                session_checked = False
+            elif trace:
+                ctx.tracing.start_chunk()
             sctx = Context(page, config, sc, out_root, log)
             t0 = time.time()
             res = Result(scenario=sc.name, ok=False, seconds=0)
             current = None
             try:
-                if config["auth"].get("required", True):
+                first = next(iter(sc.steps[0])) if sc.steps and isinstance(sc.steps[0], dict) else None
+                if config["auth"].get("required", True) and not session_checked:
                     _ensure_session(page, config)
+                    session_checked = True
+                elif previous_failed or page.url == "about:blank" or first not in _FIRST_NAV_STEPS:
+                    # Start from a clean page when the previous scenario broke off midway,
+                    # is still blank, or does not navigate by itself.
+                    page.goto(config["base_url"].rstrip("/") + config["start_path"], wait_until="domcontentloaded")
                 for i, st in enumerate(sc.steps, 1):
                     if not isinstance(st, dict) or len(st) != 1:
                         raise StepError(f"Step {i} must be a mapping with a single key, got: {st!r}")
@@ -236,36 +295,70 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                     log(f"- {current}")
                     fn(sctx, args)
                 res.ok = True
-            except Exception as e:
-                res.error = f"{type(e).__name__}: {e}"
+                res.status = "PASS"
+            except KeyboardInterrupt:
+                state.stop_reason = state.stop_reason or "interrupted (Ctrl+C)"
+                res.status = "STOPPED"
+                res.error = f"Stopped: {state.stop_reason}"
                 res.failed_step = current
-                log(f"FAILED at step {current}: {res.error}")
-                if not isinstance(e, StepError):
-                    traceback.print_exc()
-                artifacts_dir.mkdir(parents=True, exist_ok=True)
-                base = artifacts_dir / _safe(sc.name)
-                try:
-                    page.screenshot(path=f"{base}.png", full_page=True)
-                    Path(f"{base}.html").write_text(page.content(), encoding="utf-8")
-                    res.artifacts += [f"{base}.png", f"{base}.html"]
-                except Exception:
-                    pass
-            finally:
-                if trace:
+            except Exception as e:
+                res.failed_step = current
+                if state.stop_reason:
+                    res.status = "STOPPED"
+                    res.error = f"Stopped: {state.stop_reason}"
+                else:
+                    res.status = "FAIL"
+                    res.error = f"{type(e).__name__}: {e}"
+                    log(f"FAILED at step {current}: {res.error}")
+                    if not isinstance(e, StepError):
+                        traceback.print_exc()
                     artifacts_dir.mkdir(parents=True, exist_ok=True)
-                    tpath = artifacts_dir / f"{_safe(sc.name)}_trace.zip"
-                    ctx.tracing.stop(path=str(tpath))
-                    res.artifacts.append(str(tpath))
+                    base = artifacts_dir / _safe(sc.name)
+                    try:
+                        page.screenshot(path=f"{base}.png", full_page=True)
+                        Path(f"{base}.html").write_text(page.content(), encoding="utf-8")
+                        res.artifacts += [f"{base}.png", f"{base}.html"]
+                    except Exception:
+                        pass
+            finally:
                 res.seconds = round(time.time() - t0, 1)
                 res.downloads = sctx.downloads
-                ctx.close()
+                if not state.stop_reason:
+                    if trace:
+                        artifacts_dir.mkdir(parents=True, exist_ok=True)
+                        tpath = artifacts_dir / f"{_safe(sc.name)}_trace.zip"
+                        try:
+                            (ctx.tracing.stop if isolated else ctx.tracing.stop_chunk)(path=str(tpath))
+                            res.artifacts.append(str(tpath))
+                        except Exception:
+                            pass
+                    if isolated:
+                        state.closing = True
+                        ctx.close()
+                        state.closing = False
             results.append(res)
-            log(f"=== {'PASS' if res.ok else 'FAIL'} {sc.name} ({res.seconds}s)")
-            if stop_on_fail and not res.ok:
-                break
-        browser.close()
+            previous_failed = not res.ok
+            if state.stop_reason:
+                log(f"=== STOPPED {sc.name}: {state.stop_reason} -> stopping the run")
+            else:
+                log(f"=== {res.status} {sc.name} ({res.seconds}s)")
+            if stop_on_fail and not res.ok and not state.stop_reason:
+                state.stop_reason = "--stop-on-fail"
+    except KeyboardInterrupt:
+        state.stop_reason = state.stop_reason or "interrupted (Ctrl+C)"
+        log(f"Stopping: {state.stop_reason}")
+    finally:
+        done = {r.scenario for r in results}
+        results += [Result(scenario=s.name, ok=False, seconds=0, status="NOT RUN")
+                    for s in scenarios if s.name not in done]
+        state.closing = True
+        for close in (lambda: browser and browser.close(), pw.stop):
+            try:
+                close()
+            except Exception:
+                pass
 
-    _write_report(results, artifacts_dir)
+    _write_report(results, artifacts_dir, state.stop_reason)
     return results
 
 
@@ -279,19 +372,22 @@ def _ensure_session(page, config: dict) -> None:
                     f"(or set {config['auth']['username_env']}/{config['auth']['password_env']}).")
 
 
-def _write_report(results: list[Result], artifacts_dir: Path) -> None:
+def _write_report(results: list[Result], artifacts_dir: Path, stop_reason: str | None = None) -> None:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     (artifacts_dir / "report.json").write_text(
         json.dumps([r.__dict__ for r in results], indent=2, ensure_ascii=False), encoding="utf-8")
     passed = sum(r.ok for r in results)
     print()
-    print(f"{'RESULT':6} {'TIME':>7}  SCENARIO / FILE")
+    print(f"{'RESULT':8} {'TIME':>7}  SCENARIO / FILE")
     for r in results:
-        print(f"{'PASS' if r.ok else 'FAIL':6} {r.seconds:>6}s  {r.scenario}")
+        status = r.status or ("PASS" if r.ok else "FAIL")
+        print(f"{status:8} {r.seconds:>6}s  {r.scenario}")
         for d in r.downloads:
-            print(f"{'':16}-> {d['file']} ({d.get('data_rows', '?')} rows)")
-        if r.error:
-            print(f"{'':16}!! {r.failed_step}: {r.error}")
+            print(f"{'':18}-> {d['file']} ({d.get('data_rows', '?')} rows)")
+        if r.error and status == "FAIL":
+            print(f"{'':18}!! {r.failed_step}: {r.error}")
             for a in r.artifacts:
-                print(f"{'':16}   {a}")
+                print(f"{'':18}   {a}")
+    if stop_reason:
+        print(f"\nRun stopped: {stop_reason}.")
     print(f"\n{passed}/{len(results)} passed. Report: {artifacts_dir / 'report.json'}")

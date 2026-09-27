@@ -50,6 +50,14 @@ python -m weplan_export run --dry-run               # chỉ in các bước sau 
 python -m weplan_export steps                       # danh sách các loại bước
 ```
 
+**Cách chạy:**
+- Mặc định trình duyệt chạy **ẩn** (`browser.headless: true`), không hiện cửa sổ nào. Thêm `--headed` nếu muốn xem.
+- Tất cả scenario chạy nối tiếp trong **một trang duy nhất** (một cửa sổ khi `--headed`, kiểm tra đăng nhập một
+  lần). Scenario nào lỗi giữa chừng thì scenario sau sẽ mở lại trang đầu cho sạch. Muốn mỗi scenario một phiên
+  trình duyệt riêng như trước: `--isolated` (hoặc `browser.isolated: true`).
+- **Đóng cửa sổ trình duyệt** (khi `--headed`) hoặc bấm **Ctrl+C** trong terminal sẽ **dừng cả lượt chạy**: scenario
+  đang chạy ghi `STOPPED`, các scenario còn lại ghi `NOT RUN`, báo cáo vẫn được in và lưu.
+
 File được lưu vào thư mục `downloads/` (đổi ở `output_dir`). Cuối mỗi lần chạy sẽ in bảng PASS/FAIL, còn
 `downloads/_runs/<thời gian>/report.json` chứa chi tiết. Nếu một kịch bản lỗi, tool chụp màn hình và lưu HTML
 của trang tại thời điểm lỗi vào cùng thư mục đó, rồi chạy tiếp các kịch bản còn lại (dùng `-x` để dừng ngay).

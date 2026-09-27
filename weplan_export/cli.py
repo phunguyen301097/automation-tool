@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--slow-mo", type=int, default=None, help="slow down each action (ms)")
     r.add_argument("--trace", action="store_true", help="record a Playwright trace per scenario")
     r.add_argument("-x", "--stop-on-fail", action="store_true")
+    r.add_argument("--isolated", action="store_true",
+                   help="fresh browser context per scenario (default: all scenarios share one page)")
     r.add_argument("--dry-run", action="store_true", help="only print the expanded scenarios")
 
     ls = sub.add_parser("list", help="list scenarios")
@@ -86,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  - {s.name}")
     print()
     from .runner import run_scenarios
-    results = run_scenarios(scenarios, config, headed=True if args.headed else None,
-                            slow_mo=args.slow_mo, trace=args.trace, stop_on_fail=args.stop_on_fail)
+    try:
+        results = run_scenarios(scenarios, config, headed=True if args.headed else None,
+                            slow_mo=args.slow_mo, trace=args.trace, stop_on_fail=args.stop_on_fail,
+                            isolated=True if args.isolated else None)
+    except KeyboardInterrupt:
+        return 130
     return 0 if all(r.ok for r in results) else 1
