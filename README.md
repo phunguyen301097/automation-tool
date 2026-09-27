@@ -120,13 +120,15 @@ Device (`manufacturer_filter`, `brand_filter`, `model_filter`...), Wi‑Fi (`wif
 Tool được xây dựng từ HTML gốc của trang (trước khi JavaScript chạy). Hai phần do JavaScript vẽ ra sau nên
 **cần xác nhận trên web thật ở lần chạy đầu**:
 
-1. **Ô chọn ngày** (`#datepicker`). Mặc định tool gõ `MM/DD/YYYY - MM/DD/YYYY` vào ô input. Log sẽ in
-   `WARNING: date input now shows ...` nếu trang không nhận định dạng đó. Khi đó:
-   - đổi `date.input_format` / `date.range_separator` trong `config.yaml`, hoặc
-   - dùng `date.mode: calendar` (bấm từng ngày trên lịch; selector của lịch nằm trong `date.calendar`), hoặc
+1. **Ô chọn ngày** (`#datepicker`, hiển thị `01-09-2026 - 25-09-2026`). Với `date.mode: auto` (mặc định),
+   tool gõ vào ô nhập nếu có; nếu không có thì bấm mở popup, điền ô nhập trong popup, hoặc bấm ngày bắt đầu và
+   kết thúc trên lịch 2 tháng (kiểu daterangepicker) rồi bấm Apply. Log in ra `date widget now shows: ...` để
+   kiểm tra. Nếu vẫn không khớp:
+   - chỉnh `date.calendar` (selector tiêu đề tháng, nút prev/next, ô ngày, nút Apply) trong `config.yaml`, hoặc
+   - đổi `date.input_format` / `date.range_separator`, hoặc
    - nếu có nút preset: `set_date: {preset: "Last 30 days"}`.
-2. **Nút "Download table" và menu chọn loại file**. Tool tìm nút có chữ `Download table` trong `#tableProvinces`.
-   Sau khi bấm, nếu hiện menu thì chọn mục khớp `Excel|xlsx` hoặc `CSV`, còn nếu trình duyệt tải về ngay thì
+2. **Nút "Download table" và menu chọn loại file** (`As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG`).
+   `format: xlsx|json|csv|pdf|txt|png` chọn đúng mục tương ứng, còn nếu trình duyệt tải về ngay thì
    dùng luôn file đó. Nếu chữ trên web khác thì chỉnh `download_button_text`, hoặc `format_text` trong bước
    `download_table`.
 

@@ -355,37 +355,54 @@ def set_date(ctx: Context, args: dict) -> None:
     ctx.vars["date_from"] = d_from.isoformat()
     ctx.vars["date_to"] = d_to.isoformat()
 
-    if mode == "input":
-        fmt = dcfg["input_format"]
-        inputs = _find_date_inputs(ctx)
-        if len(inputs) >= 2:
-            # Separate start / end inputs.
-            ctx.log(f"  date -> start '{d_from.strftime(fmt)}', end '{d_to.strftime(fmt)}'")
-            _type_into(inputs[0], d_from.strftime(fmt))
-            _type_into(inputs[1], d_to.strftime(fmt))
+    fmt = dcfg["input_format"]
+    cal = dcfg["calendar"]
+    if mode in ("auto", "input"):
+        inputs = _find_date_inputs(ctx, allow_calendar=(mode == "auto"))
+        if inputs is None:
+            mode = "calendar"  # auto: no input anywhere, but a calendar popup is open
         else:
-            text = d_from.strftime(fmt) + dcfg["range_separator"] + d_to.strftime(fmt)
-            ctx.log(f"  date -> '{text}'")
-            _type_into(inputs[0], text)
-            value = inputs[0].input_value()
-            if value.replace(" ", "") != text.replace(" ", ""):
-                ctx.log(f"  WARNING: date input now shows '{value}' (expected '{text}'). "
-                        "Check date.input_format in config.yaml or use mode: calendar")
-        if dcfg["calendar"].get("apply"):
-            _click_if_visible(page.locator(dcfg["calendar"]["apply"]).first)
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-    elif mode == "calendar":
-        cal = dcfg["calendar"]
+            if len(inputs) >= 2:
+                # Separate start / end inputs.
+                ctx.log(f"  date -> start '{d_from.strftime(fmt)}', end '{d_to.strftime(fmt)}'")
+                _type_into(inputs[0], d_from.strftime(fmt))
+                _type_into(inputs[1], d_to.strftime(fmt))
+            else:
+                text = d_from.strftime(fmt) + dcfg["range_separator"] + d_to.strftime(fmt)
+                ctx.log(f"  date -> '{text}'")
+                _type_into(inputs[0], text)
+                value = inputs[0].input_value()
+                if value.replace(" ", "") != text.replace(" ", ""):
+                    ctx.log(f"  WARNING: date input now shows '{value}' (expected '{text}'). "
+                            "Check date.input_format in config.yaml or use mode: calendar")
+            if cal.get("apply"):
+                _click_if_visible(page.locator(cal["apply"]).first)
+    if mode == "calendar":
         ctx.log(f"  date (calendar) -> {d_from} .. {d_to}")
-        _open_datepicker(ctx)
+        if not _calendar_open(ctx):
+            _open_datepicker(ctx)
         for d in (d_from, d_to):
             _calendar_pick(ctx, cal, d)
         if cal.get("apply"):
-            page.locator(cal["apply"]).first.click()
-        page.keyboard.press("Escape")
-    else:
+            _click_if_visible(page.locator(cal["apply"]).first)
+    elif mode not in ("auto", "input"):
         raise StepError(f"Unknown date mode '{mode}'")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(500)
+    _log_date_shown(ctx)
+
+
+def _calendar_open(ctx: Context) -> bool:
+    return bool(_visible(ctx.page.locator(ctx.config["date"]["calendar"]["title"])))
+
+
+def _log_date_shown(ctx: Context) -> None:
+    try:
+        shown = ctx.page.locator(ctx.sel["datepicker"]).first.inner_text().strip()
+        shown = shown or ctx.page.locator(ctx.sel["datepicker"] + " input").first.input_value()
+        ctx.log(f"  date widget now shows: '{' '.join(shown.split())[:80]}'")
+    except Exception:
+        pass
 
 
 def _visible(loc) -> list:
@@ -428,8 +445,10 @@ def _open_datepicker(ctx: Context) -> None:
     page.wait_for_timeout(800)
 
 
-def _find_date_inputs(ctx: Context) -> list:
-    """Visible date inputs: inside #datepicker, or in the popup opened by clicking it."""
+def _find_date_inputs(ctx: Context, allow_calendar: bool = False) -> list | None:
+    """Visible date inputs: inside #datepicker, or in the popup opened by clicking it.
+
+    Returns None (auto mode) when there is no input but a calendar popup is open."""
     page = ctx.page
     try:
         page.locator(ctx.sel["datepicker_input"]).first.wait_for(state="visible", timeout=5_000)
@@ -443,6 +462,9 @@ def _find_date_inputs(ctx: Context) -> list:
     inputs = _visible(page.locator(ctx.config["date"]["popup_inputs"]))
     if inputs:
         return inputs
+    if allow_calendar and _calendar_open(ctx):
+        ctx.log("  picker has no inputs -> using its calendar")
+        return None
     path = _dump_datepicker(ctx)
     raise StepError(
         "Could not find a date input. The date widget's HTML was saved to "
@@ -478,28 +500,41 @@ def _dump_datepicker(ctx: Context) -> Path:
     return path
 
 
+def _parse_month_title(title: str) -> dt.date | None:
+    title = " ".join(title.split()).title()
+    for fmt in ("%B %Y", "%b %Y", "%m/%Y", "%Y-%m"):
+        try:
+            return dt.datetime.strptime(title, fmt).date().replace(day=1)
+        except ValueError:
+            continue
+    return None
+
+
 def _calendar_pick(ctx: Context, cal: dict, d: dt.date) -> None:
     page = ctx.page
-    target = d.strftime("%B %Y").lower()
-    for _ in range(36):
-        title = page.locator(cal["title"]).first.inner_text().lower()
-        title = " ".join(title.split())
-        if d.strftime("%B").lower() in title and str(d.year) in title:
+    target = d.replace(day=1)
+    for _ in range(40):
+        titles = _visible(page.locator(cal["title"]))
+        if not titles:
+            raise StepError("Calendar popup is not open (date.calendar.title matched nothing visible)")
+        raw = titles[0].inner_text()
+        shown = _parse_month_title(raw)
+        if shown is None:
+            raise StepError(f"Cannot read calendar month from '{raw.strip()}'")
+        if shown == target:
             break
-        # Compare month/year to decide direction.
-        shown = None
-        for fmt in ("%B %Y", "%b %Y"):
-            try:
-                shown = dt.datetime.strptime(title.title(), fmt).date()
-                break
-            except ValueError:
-                continue
-        go_next = shown is None or shown < d.replace(day=1)
-        page.locator(cal["next"] if go_next else cal["prev"]).first.click()
-        page.wait_for_timeout(150)
+        nav = _visible(page.locator(cal["next"] if shown < target else cal["prev"]))
+        if not nav:
+            raise StepError(f"Cannot move calendar from {shown:%b %Y} to {target:%b %Y} (outside date limits?)")
+        nav[0].click()
+        page.wait_for_timeout(200)
     else:
-        raise StepError(f"Could not navigate calendar to {target}")
-    page.locator(cal["day"]).filter(has_text=_text_regex(str(d.day), exact=True)).first.click()
+        raise StepError(f"Could not navigate calendar to {target:%B %Y}")
+    day = page.locator(cal["day"]).filter(has_text=_text_regex(str(d.day), exact=True))
+    if not _visible(day):
+        raise StepError(f"Day {d} is not selectable in the calendar (outside the dashboard's date limits?)")
+    _visible(day)[0].click()
+    page.wait_for_timeout(200)
 
 
 # --------------------------------------------------------------------------- query / results
@@ -526,7 +561,14 @@ def choose_view(ctx: Context, args: Any) -> None:
         else:
             loc = page.locator(css).first
         label = key
-    loc.wait_for(state="visible", timeout=ctx.timeouts["data_load"])
+    try:
+        loc.wait_for(state="visible", timeout=15_000)
+    except PWTimeout:
+        # The dashboard may already show results (e.g. restored last query): the cards are hidden then.
+        if page.locator(ctx.sel["results"]).first.is_visible():
+            ctx.log(f"  view cards hidden, results already shown -> keeping current view (wanted {label})")
+            return
+        loc.wait_for(state="visible", timeout=ctx.timeouts["data_load"])
     ctx.log(f"  view -> {label}")
     loc.click()
     if isinstance(args, dict) and args.get("municipality"):
@@ -567,12 +609,15 @@ def wait_for_table(ctx: Context, args: Any = None) -> None:
 
 # --------------------------------------------------------------------------- download
 
+# Menu items of "Download table": As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG.
 _FORMAT_TEXT = {
-    "xlsx": r"excel|xlsx",
-    "xls": r"excel|xls",
-    "csv": r"csv",
-    "json": r"json",
-    "pdf": r"pdf",
+    "xlsx": r"^\s*As XLSX\s*$|excel|xlsx",
+    "xls": r"^\s*As XLS\s*$|excel",
+    "csv": r"^\s*As CSV\s*$",
+    "json": r"^\s*As JSON\s*$",
+    "pdf": r"^\s*As PDF\s*$",
+    "txt": r"^\s*As TXT\s*$",
+    "png": r"^\s*As PNG\s*$",
 }
 
 

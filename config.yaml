@@ -21,11 +21,12 @@ timeouts:                        # mili-giây
   download: 180000
 
 date:
-  # Cách nhập khoảng thời gian:
-  #   input    : gõ "08/01/2026 - 08/31/2026" vào ô date
-  #   calendar : bấm chọn ngày trên lịch popup
-  mode: input
-  input_format: "%m/%d/%Y"
+  # Cách chọn khoảng thời gian:
+  #   auto     : tự dò (ô nhập -> ô nhập trong popup -> bấm ngày trên lịch). Nên dùng.
+  #   input    : gõ "01-09-2026 - 25-09-2026" vào ô date
+  #   calendar : bấm ngày bắt đầu / kết thúc trên lịch popup rồi Apply
+  mode: auto
+  input_format: "%d-%m-%Y"       # dashboard hiển thị 01-09-2026 - 25-09-2026
   range_separator: " - "
 
 selectors:

@@ -213,3 +213,33 @@ def test_login_style_manual_download_is_kept(tmp_path, config, server):
         page.wait_for_timeout(500)
         browser.close()
     assert (Path(config["output_dir"]) / "manual" / "table_export.csv").exists()
+
+
+def test_date_text_input_variant(tmp_path, config):
+    doc = {"scenarios": [{
+        "name": "input_date",
+        "steps": [
+            {"goto": "/app/bi/coverage?dp=input"},
+            {"set_date": {"from": "2026-07-15", "to": "2026-08-02"}},
+            {"choose_view": "macro"},
+            {"wait_for_table": {}},
+            {"download_table": {"format": "json"}},
+        ],
+    }]}
+    r = _run(tmp_path, config, doc)[0]
+    assert r.ok, r.error
+    assert r.downloads[0]["file"].endswith(".json")
+    assert "date,2026-07-15..2026-08-02" in Path(r.downloads[0]["file"]).read_text()
+
+
+def test_calendar_day_after_max_date_fails_clearly(tmp_path, config):
+    doc = {"scenarios": [{
+        "name": "future_date",
+        "steps": [
+            {"goto": "/app/bi/coverage"},
+            {"set_date": {"from": "2026-09-01", "to": "2026-09-25"}},
+        ],
+    }]}
+    r = _run(tmp_path, config, doc)[0]
+    assert not r.ok
+    assert "2026-09-25 is not selectable" in r.error

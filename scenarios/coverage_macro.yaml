@@ -5,7 +5,7 @@
 vars:
   from: max-30d          # 30 ngày tính tới ngày mới nhất có dữ liệu (window.dateLimits.maxDate)
   to: max
-  format: xlsx
+  format: xlsx           # xlsx | csv | json | pdf | txt | png (menu "Download table")
 
 scenarios:
   - name: coverage_burundi_macro_all_networks
@@ -14,7 +14,7 @@ scenarios:
       - open_menu: ["Coverage time"]
       - select_country: Burundi
       - set_date: {from: "${from}", to: "${to}"}
-      - select_filter: {id: carrier_filter, options: [ECONET, LUMITEL, ONAMOB]}
+      - select_filter: {id: carrier_filter, options: [ECONET, LUMITEL, ONAMOB, SMART]}
       - choose_view: macro                    # = click thẻ "Macro data" (#byCountry)
       - wait_for_table: {}
       - download_table:
@@ -26,7 +26,7 @@ scenarios:
     tags: [coverage]
     matrix:
       country: [Burundi]
-      network: [ECONET, LUMITEL]
+      network: [ECONET, LUMITEL, ONAMOB]
     steps:
       - open_menu: ["Coverage time"]
       - select_country: "${country}"

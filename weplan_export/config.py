@@ -57,19 +57,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "download_button_text": "Download table",
     },
     "date": {
-        # input: type into the date input. calendar: click days in the popup.
-        "mode": "input",
-        "input_format": "%m/%d/%Y",
+        # auto    : input if the widget has one, else inputs in its popup, else click the calendar.
+        # input   : type "01-09-2026 - 25-09-2026" into the date input.
+        # calendar: click the start and end day in the popup calendar.
+        "mode": "auto",
+        "input_format": "%d-%m-%Y",  # the dashboard shows 01-09-2026 - 25-09-2026
         "range_separator": " - ",
         # Inputs looked for in the popup when #datepicker itself has no <input>.
         "popup_inputs": ".daterangepicker input, .p-datepicker input, .dp__menu input, .mx-datepicker-main input, "
                         ".vc-popover-content input, .flatpickr-calendar input, [role=dialog] input, .dropdown-menu.show input",
+        # Defaults cover daterangepicker / vue2-daterange-picker (two months + Apply) and PrimeVue.
         "calendar": {
-            "title": ".p-datepicker-title, .p-datepicker-header",
-            "prev": ".p-datepicker-prev, .p-datepicker-prev-button",
-            "next": ".p-datepicker-next, .p-datepicker-next-button",
-            "day": "td:not(.p-datepicker-other-month):not(.p-datepicker-day-cell-other-month) span",
-            "apply": None,
+            "title": ".daterangepicker .drp-calendar.left .month, .daterangepicker .calendar.left .month, "
+                     ".p-datepicker-title, .p-datepicker-header",
+            "prev": ".daterangepicker .prev.available, .p-datepicker-prev, .p-datepicker-prev-button",
+            "next": ".daterangepicker .next.available, .p-datepicker-next, .p-datepicker-next-button",
+            "day": ".daterangepicker .drp-calendar.left td.available:not(.off), "
+                   ".daterangepicker .calendar.left td.available:not(.off), "
+                   "td:not(.p-datepicker-other-month):not(.p-datepicker-day-cell-other-month) > span",
+            "apply": ".daterangepicker .applyBtn, .drp-buttons .applyBtn",
         },
     },
     # Aliases for the visualization cards ("Select a visualization mode").
