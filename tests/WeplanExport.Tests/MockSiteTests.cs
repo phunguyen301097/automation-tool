@@ -110,11 +110,11 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Timeouts = new TimeoutConfig { Default = 10_000, DataLoad = 20_000, Download = 20_000 },
     };
 
-    private async Task<List<ScenarioResult>> RunYamlAsync(string yaml, AppConfig config)
+    private async Task<List<ScenarioResult>> RunYamlAsync(string yaml, AppConfig config, RunState? state = null)
     {
         var file = Path.Combine(_tmp, "s.yaml");
         await File.WriteAllTextAsync(file, yaml);
-        return await Runner.RunAsync(ScenarioLoader.Load(new[] { file }), config, new RunOptions());
+        return await Runner.RunAsync(ScenarioLoader.Load(new[] { file }), config, new RunOptions(), state);
     }
 
     private static Dictionary<string, string> ReadXlsx(string path)
@@ -353,5 +353,68 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         var r = Assert.Single(results);
         Assert.True(r.Ok, r.Error);
         Assert.Contains("date,2026-08-03..2026-09-14", File.ReadAllText(r.Downloads[0].File));
+    }
+
+    private const string TwoScenarios = """
+        scenarios:
+          - name: first
+            steps:
+              - goto: /app/bi/coverage
+              - js: "() => sessionStorage.setItem('mark', '1')"
+          - name: second
+            steps:
+              - open_menu: ["Coverage time"]
+              - js: "() => { if (sessionStorage.getItem('mark') !== '1') throw new Error('not the same page'); }"
+        """;
+
+    [Fact]
+    public async Task Scenarios_Share_One_Page_By_Default()
+    {
+        var results = await RunYamlAsync(TwoScenarios, Config());
+        Assert.Equal(new[] { "PASS", "PASS" }, results.Select(r => r.Status));
+    }
+
+    [Fact]
+    public async Task Isolated_Mode_Uses_Fresh_Page()
+    {
+        var config = Config();
+        config.Browser.Isolated = true;
+        var results = await RunYamlAsync(TwoScenarios, config);
+        Assert.Equal(new[] { "PASS", "FAIL" }, results.Select(r => r.Status));
+        Assert.Contains("not the same page", results[1].Error);
+    }
+
+    [Fact]
+    public async Task Closing_The_Browser_Window_Stops_The_Run()
+    {
+        Steps.Registry["user_closes_window"] = new((ctx, _) => ctx.Page.CloseAsync(), "test only");
+        var results = await RunYamlAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}]}
+              - {name: b, steps: [{goto: /app/bi/coverage}, {user_closes_window: null}, {wait: 100}]}
+              - {name: c, steps: [{goto: /app/bi/coverage}]}
+              - {name: d, steps: [{goto: /app/bi/coverage}]}
+            """, Config());
+        Assert.Equal(new[] { "PASS", "STOPPED", "NOT RUN", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.Contains("window was closed", results[1].Error);
+    }
+
+    [Fact]
+    public async Task Ctrl_C_Stops_The_Run()
+    {
+        var state = new RunState();
+        // Same as the Console.CancelKeyPress handler: record the stop, close the page.
+        Steps.Registry["ctrl_c"] = new(async (ctx, _) =>
+        {
+            state.Stop("interrupted (Ctrl+C)");
+            await ctx.Page.CloseAsync();
+        }, "test only");
+        var results = await RunYamlAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}, {ctrl_c: null}, {wait: 100}]}
+              - {name: b, steps: [{goto: /app/bi/coverage}]}
+            """, Config(), state);
+        Assert.Equal(new[] { "STOPPED", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.Contains("Ctrl+C", results[0].Error);
     }
 }

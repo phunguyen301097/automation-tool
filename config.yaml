@@ -9,7 +9,8 @@ auth:
   storage_state: .auth/state.json  # session đăng nhập (tạo bằng lệnh `login`)
 
 browser:
-  headless: true
+  headless: true                 # true = chạy ẩn, không hiện cửa sổ (thêm --headed để xem)
+  isolated: false                # false = mọi scenario dùng chung 1 trang; true = mỗi scenario 1 phiên riêng
   # Dùng Chrome/Edge đã cài sẵn trên máy thay vì Chromium của Playwright:
   # channel: chrome             # hoặc msedge
   slow_mo: 0

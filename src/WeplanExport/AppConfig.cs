@@ -56,6 +56,8 @@ public class AuthConfig
 public class BrowserConfig
 {
     public bool Headless { get; set; } = true;
+    /// <summary>false: all scenarios share one page. true: fresh context per scenario (--isolated).</summary>
+    public bool Isolated { get; set; }
     /// <summary>"chrome" / "msedge" to use an installed browser.</summary>
     public string? Channel { get; set; }
     public string? ExecutablePath { get; set; }

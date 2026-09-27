@@ -9,6 +9,8 @@ public class ScenarioResult
 {
     public required string Scenario { get; init; }
     public bool Ok { get; set; }
+    /// <summary>PASS | FAIL | STOPPED | NOT RUN</summary>
+    public string Status { get; set; } = "";
     public double Seconds { get; set; }
     public List<DownloadInfo> Downloads { get; set; } = new();
     public string? Error { get; set; }
@@ -22,6 +24,26 @@ public class RunOptions
     public int? SlowMo { get; init; }
     public bool Trace { get; init; }
     public bool StopOnFail { get; init; }
+    /// <summary>Fresh browser context per scenario instead of one shared page (null: config).</summary>
+    public bool? Isolated { get; init; }
+}
+
+/// <summary>Tracks whether the user closed the browser / pressed Ctrl+C, to stop the whole run.</summary>
+public class RunState
+{
+    public string? StopReason { get; private set; }
+    /// <summary>True while the tool itself closes pages/contexts.</summary>
+    public bool Closing { get; set; }
+    public IPage? CurrentPage { get; set; }
+
+    public void Stop(string reason)
+    {
+        if (!Closing) StopReason ??= reason;
+    }
+
+    public void WatchPage(IPage page) => page.Close += (_, _) => Stop("the browser window was closed");
+
+    public void WatchBrowser(IBrowser browser) => browser.Disconnected += (_, _) => Stop("the browser was closed");
 }
 
 /// <summary>Browser session management and scenario execution.</summary>
@@ -225,79 +247,188 @@ public static class Runner
         return outDir;
     }
 
-    public static async Task<List<ScenarioResult>> RunAsync(List<Scenario> scenarios, AppConfig config, RunOptions opts)
+    private static readonly HashSet<string> FirstNavSteps = new() { "goto", "open_menu", "menu" };
+
+    /// <summary>
+    /// Run scenarios one after another. By default all scenarios share one browser page (one
+    /// window with --headed, a single login check); Isolated gives each a fresh context.
+    /// Closing the browser window or pressing Ctrl+C stops the whole run; remaining scenarios
+    /// are reported as NOT RUN.
+    /// </summary>
+    public static async Task<List<ScenarioResult>> RunAsync(List<Scenario> scenarios, AppConfig config, RunOptions opts,
+                                                            RunState? state = null)
     {
+        state ??= new RunState();
+        var isolated = opts.Isolated ?? config.Browser.Isolated;
         var runId = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var outRoot = config.OutputDir;
         var artifactsDir = Path.Combine(outRoot, "_runs", runId);
         var results = new List<ScenarioResult>();
 
-        using var pw = await Playwright.CreateAsync();
-        await using var browser = await LaunchBrowserAsync(pw, config, opts.Headed, opts.SlowMo);
-        for (var idx = 0; idx < scenarios.Count; idx++)
+        // Ctrl+C: record the stop and close the page so the running step ends right away.
+        ConsoleCancelEventHandler onCancel = (_, e) =>
         {
-            var sc = scenarios[idx];
-            Log($"=== [{idx + 1}/{scenarios.Count}] {sc.Name}");
-            var ctx = await NewContextAsync(browser, config);
-            if (opts.Trace) await ctx.Tracing.StartAsync(new() { Screenshots = true, Snapshots = true });
-            var page = await ctx.NewPageAsync();
-            var sctx = new StepContext(page, config, sc, outRoot, Log);
-            var res = new ScenarioResult { Scenario = sc.Name };
-            var sw = Stopwatch.StartNew();
-            string? current = null;
-            try
+            e.Cancel = true;
+            state.Stop("interrupted (Ctrl+C)");
+            _ = state.CurrentPage?.CloseAsync();
+        };
+        Console.CancelKeyPress += onCancel;
+        IPlaywright? pw = null;
+        IBrowser? browser = null;
+        try
+        {
+            pw = await Playwright.CreateAsync();
+            browser = await LaunchBrowserAsync(pw, config, opts.Headed, opts.SlowMo);
+            state.WatchBrowser(browser);
+            IBrowserContext? ctx = null;
+            IPage? page = null;
+            if (!isolated)
             {
-                if (config.Auth.Required) await EnsureSessionAsync(page, config);
-                for (var i = 0; i < sc.Steps.Count; i++)
-                {
-                    var step = sc.Steps[i];
-                    current = $"{i + 1}. {step.Name}";
-                    if (!Steps.Registry.TryGetValue(step.Name, out var def))
-                        throw new StepException($"Unknown step '{step.Name}'. Available: {string.Join(", ", Steps.Registry.Keys.Order())}");
-                    Log($"- {current}");
-                    await def.Run(sctx, step.Args);
-                }
-                res.Ok = true;
+                ctx = await NewContextAsync(browser, config);
+                if (opts.Trace) await ctx.Tracing.StartAsync(new() { Screenshots = true, Snapshots = true });
+                page = await ctx.NewPageAsync();
+                state.WatchPage(page);
+                state.CurrentPage = page;
             }
-            catch (Exception e)
+            var sessionChecked = false;
+            var previousFailed = false;
+
+            for (var idx = 0; idx < scenarios.Count; idx++)
             {
-                res.Error = $"{e.GetType().Name}: {e.Message}";
-                res.FailedStep = current;
-                Log($"FAILED at step {current}: {res.Error}");
-                if (e is not StepException) Console.Error.WriteLine(e);
-                Directory.CreateDirectory(artifactsDir);
-                var baseName = Path.Combine(artifactsDir, Safe(sc.Name));
+                var sc = scenarios[idx];
+                if (state.StopReason is not null)
+                {
+                    results.Add(new ScenarioResult { Scenario = sc.Name, Status = "NOT RUN" });
+                    continue;
+                }
+                Log($"=== [{idx + 1}/{scenarios.Count}] {sc.Name}");
+                if (isolated)
+                {
+                    ctx = await NewContextAsync(browser, config);
+                    if (opts.Trace) await ctx.Tracing.StartAsync(new() { Screenshots = true, Snapshots = true });
+                    page = await ctx.NewPageAsync();
+                    state.WatchPage(page);
+                    state.CurrentPage = page;
+                    sessionChecked = false;
+                }
+                else if (opts.Trace)
+                {
+                    await ctx!.Tracing.StartChunkAsync();
+                }
+                var sctx = new StepContext(page!, config, sc, outRoot, Log);
+                var res = new ScenarioResult { Scenario = sc.Name };
+                var sw = Stopwatch.StartNew();
+                string? current = null;
                 try
                 {
-                    await page.ScreenshotAsync(new() { Path = baseName + ".png", FullPage = true });
-                    await File.WriteAllTextAsync(baseName + ".html", await page.ContentAsync());
-                    res.Artifacts.Add(baseName + ".png");
-                    res.Artifacts.Add(baseName + ".html");
+                    var first = sc.Steps.Count > 0 ? sc.Steps[0].Name : null;
+                    if (config.Auth.Required && !sessionChecked)
+                    {
+                        await EnsureSessionAsync(page!, config);
+                        sessionChecked = true;
+                    }
+                    else if (previousFailed || page!.Url == "about:blank" || first is null || !FirstNavSteps.Contains(first))
+                    {
+                        // Start from a clean page when the previous scenario broke off midway,
+                        // is still blank, or does not navigate by itself.
+                        await page!.GotoAsync(config.BaseUrl.TrimEnd('/') + config.StartPath,
+                            new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+                    }
+                    for (var i = 0; i < sc.Steps.Count; i++)
+                    {
+                        var step = sc.Steps[i];
+                        current = $"{i + 1}. {step.Name}";
+                        if (!Steps.Registry.TryGetValue(step.Name, out var def))
+                            throw new StepException($"Unknown step '{step.Name}'. Available: {string.Join(", ", Steps.Registry.Keys.Order())}");
+                        Log($"- {current}");
+                        await def.Run(sctx, step.Args);
+                    }
+                    res.Ok = true;
+                    res.Status = "PASS";
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
-                    // page may be closed/crashed; nothing more to capture
+                    res.FailedStep = current;
+                    if (state.StopReason is not null)
+                    {
+                        res.Status = "STOPPED";
+                        res.Error = $"Stopped: {state.StopReason}";
+                    }
+                    else
+                    {
+                        res.Status = "FAIL";
+                        res.Error = $"{e.GetType().Name}: {e.Message}";
+                        Log($"FAILED at step {current}: {res.Error}");
+                        if (e is not StepException) Console.Error.WriteLine(e);
+                        Directory.CreateDirectory(artifactsDir);
+                        var baseName = Path.Combine(artifactsDir, Safe(sc.Name));
+                        try
+                        {
+                            await page!.ScreenshotAsync(new() { Path = baseName + ".png", FullPage = true });
+                            await File.WriteAllTextAsync(baseName + ".html", await page.ContentAsync());
+                            res.Artifacts.Add(baseName + ".png");
+                            res.Artifacts.Add(baseName + ".html");
+                        }
+                        catch (Exception)
+                        {
+                            // page may be closed/crashed; nothing more to capture
+                        }
+                    }
                 }
+                finally
+                {
+                    res.Seconds = Math.Round(sw.Elapsed.TotalSeconds, 1);
+                    res.Downloads = sctx.Downloads;
+                    if (state.StopReason is null)
+                    {
+                        if (opts.Trace)
+                        {
+                            Directory.CreateDirectory(artifactsDir);
+                            var tracePath = Path.Combine(artifactsDir, Safe(sc.Name) + "_trace.zip");
+                            try
+                            {
+                                if (isolated) await ctx!.Tracing.StopAsync(new() { Path = tracePath });
+                                else await ctx!.Tracing.StopChunkAsync(new() { Path = tracePath });
+                                res.Artifacts.Add(tracePath);
+                            }
+                            catch (PlaywrightException)
+                            {
+                            }
+                        }
+                        if (isolated)
+                        {
+                            state.Closing = true;
+                            await ctx!.CloseAsync();
+                            state.Closing = false;
+                        }
+                    }
+                }
+                results.Add(res);
+                previousFailed = !res.Ok;
+                Log(state.StopReason is not null
+                    ? $"=== STOPPED {sc.Name}: {state.StopReason} -> stopping the run"
+                    : $"=== {res.Status} {sc.Name} ({res.Seconds}s)");
+                if (opts.StopOnFail && !res.Ok) state.Stop("--stop-on-fail");
             }
-            finally
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancel;
+            var done = results.Select(r => r.Scenario).ToHashSet();
+            results.AddRange(scenarios.Where(s => !done.Contains(s.Name))
+                .Select(s => new ScenarioResult { Scenario = s.Name, Status = "NOT RUN" }));
+            state.Closing = true;
+            try
             {
-                if (opts.Trace)
-                {
-                    Directory.CreateDirectory(artifactsDir);
-                    var tracePath = Path.Combine(artifactsDir, Safe(sc.Name) + "_trace.zip");
-                    await ctx.Tracing.StopAsync(new() { Path = tracePath });
-                    res.Artifacts.Add(tracePath);
-                }
-                res.Seconds = Math.Round(sw.Elapsed.TotalSeconds, 1);
-                res.Downloads = sctx.Downloads;
-                await ctx.CloseAsync();
+                if (browser is not null) await browser.CloseAsync();
             }
-            results.Add(res);
-            Log($"=== {(res.Ok ? "PASS" : "FAIL")} {sc.Name} ({res.Seconds}s)");
-            if (opts.StopOnFail && !res.Ok) break;
+            catch (Exception)
+            {
+            }
+            pw?.Dispose();
         }
 
-        WriteReport(results, artifactsDir);
+        WriteReport(results, artifactsDir, state.StopReason);
         return results;
     }
 
@@ -312,7 +443,7 @@ public static class Runner
 
     private static string Safe(string s) => Regex.Replace(s, @"[^\w.\-]+", "_").Trim('_');
 
-    private static void WriteReport(List<ScenarioResult> results, string artifactsDir)
+    private static void WriteReport(List<ScenarioResult> results, string artifactsDir, string? stopReason)
     {
         Directory.CreateDirectory(artifactsDir);
         var reportPath = Path.Combine(artifactsDir, "report.json");
@@ -323,15 +454,16 @@ public static class Runner
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }));
         Console.WriteLine();
-        Console.WriteLine($"{"RESULT",-6} {"TIME",7}  SCENARIO / FILE");
+        Console.WriteLine($"{"RESULT",-8} {"TIME",7}  SCENARIO / FILE");
         foreach (var r in results)
         {
-            Console.WriteLine($"{(r.Ok ? "PASS" : "FAIL"),-6} {r.Seconds,6}s  {r.Scenario}");
-            foreach (var d in r.Downloads) Console.WriteLine($"{"",16}-> {d.File} ({d.DataRows} rows)");
-            if (r.Error is null) continue;
-            Console.WriteLine($"{"",16}!! {r.FailedStep}: {r.Error}");
-            foreach (var a in r.Artifacts) Console.WriteLine($"{"",16}   {a}");
+            Console.WriteLine($"{r.Status,-8} {r.Seconds,6}s  {r.Scenario}");
+            foreach (var d in r.Downloads) Console.WriteLine($"{"",18}-> {d.File} ({d.DataRows} rows)");
+            if (r.Status != "FAIL") continue;
+            Console.WriteLine($"{"",18}!! {r.FailedStep}: {r.Error}");
+            foreach (var a in r.Artifacts) Console.WriteLine($"{"",18}   {a}");
         }
+        if (stopReason is not null) Console.WriteLine($"\nRun stopped: {stopReason}.");
         Console.WriteLine($"\n{results.Count(r => r.Ok)}/{results.Count} passed. Report: {reportPath}");
     }
 }

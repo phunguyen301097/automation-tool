@@ -16,6 +16,7 @@ Commands:
       --slow-mo <ms>            slow down each action
       --trace                   record a Playwright trace per scenario
       -x, --stop-on-fail        stop at the first failed scenario
+      --isolated                fresh browser context per scenario (default: one shared page)
       --dry-run                 only print the expanded scenarios
   list [files...]               list scenarios
   steps                         list available step types
@@ -38,7 +39,7 @@ var command = rest[0];
 var files = new List<string>();
 var only = new List<string>();
 var tags = new List<string>();
-bool headed = false, trace = false, stopOnFail = false, dryRun = false;
+bool headed = false, trace = false, stopOnFail = false, dryRun = false, isolated = false;
 int? slowMo = null;
 var view = "macro";
 for (var i = 1; i < rest.Count; i++)
@@ -52,6 +53,7 @@ for (var i = 1; i < rest.Count; i++)
         case "--trace": trace = true; break;
         case "-x" or "--stop-on-fail": stopOnFail = true; break;
         case "--dry-run": dryRun = true; break;
+        case "--isolated": isolated = true; break;
         case "--view": view = rest[++i]; break;
         default: files.Add(rest[i]); break;
     }
@@ -110,6 +112,7 @@ try
                 SlowMo = slowMo,
                 Trace = trace,
                 StopOnFail = stopOnFail,
+                Isolated = isolated ? true : null,
             });
             return results.All(r => r.Ok) ? 0 : 1;
 
