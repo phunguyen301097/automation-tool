@@ -11,7 +11,7 @@ from pathlib import Path
 
 from playwright.sync_api import Browser, BrowserContext, Playwright, sync_playwright
 
-from .actions import STEPS, Context, StepError, _safe
+from .actions import STEPS, Context, StepError, _safe, dismiss_popups, install_popup_handler
 from .config import Scenario
 
 
@@ -162,6 +162,7 @@ def inspect_page(config: dict, headed: bool = False, view: str = "macro") -> Pat
         ctx = new_context(browser, config)
         _keep_manual_downloads(ctx, config)
         page = ctx.new_page()
+        install_popup_handler(page, config, log)
         if config["auth"].get("required", True):
             _ensure_session(page, config)
         else:
@@ -254,6 +255,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                 ctx.tracing.start(screenshots=True, snapshots=True, sources=False)
             page = ctx.new_page()
             state.watch_page(page)
+            install_popup_handler(page, config, log)
         session_checked = False
         previous_failed = False
 
@@ -268,6 +270,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                     ctx.tracing.start(screenshots=True, snapshots=True, sources=False)
                 page = ctx.new_page()
                 state.watch_page(page)
+                install_popup_handler(page, config, log)
                 session_checked = False
             elif trace:
                 ctx.tracing.start_chunk()
@@ -293,6 +296,8 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                     if fn is None:
                         raise StepError(f"Unknown step '{name}'. Available: {sorted(STEPS)}")
                     log(f"- {current}")
+                    if config["popups"].get("auto_dismiss", True) and name not in ("dismiss_popups", "close_popups"):
+                        dismiss_popups(page, config, log)
                     fn(sctx, args)
                 res.ok = True
                 res.status = "PASS"
@@ -348,6 +353,9 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
         state.stop_reason = state.stop_reason or "interrupted (Ctrl+C)"
         log(f"Stopping: {state.stop_reason}")
     finally:
+        # Keep the refreshed session (cookies, "announcement seen" flags) for the next run.
+        if not isolated and page is not None and not state.stop_reason:
+            _save_session(page, config)
         done = {r.scenario for r in results}
         results += [Result(scenario=s.name, ok=False, seconds=0, status="NOT RUN")
                     for s in scenarios if s.name not in done]
@@ -360,6 +368,16 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
 
     _write_report(results, artifacts_dir, state.stop_reason)
     return results
+
+
+def _save_session(page, config: dict) -> None:
+    if not config["auth"].get("required", True):
+        return
+    try:
+        if not page.is_closed() and is_logged_in(page, config):
+            page.context.storage_state(path=config["auth"]["storage_state"])
+    except Exception:
+        pass
 
 
 def _ensure_session(page, config: dict) -> None:

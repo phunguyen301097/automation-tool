@@ -328,3 +328,37 @@ def test_ctrl_c_stops_the_run(tmp_path, config, monkeypatch):
     ]}
     results = _run(tmp_path, config, doc)
     assert [r.status for r in results] == ["STOPPED", "NOT RUN"]
+
+
+def _announce_flow(announce):
+    return {"scenarios": [
+        {"name": "with_popup", "steps": [
+            {"goto": f"/app/bi/coverage?announce={announce}"},
+            {"wait": 1800},  # popup is now covering the page
+            {"set_date": {"from": "2026-08-03", "to": "2026-09-14"}},
+            {"select_filter": {"id": "carrier_filter", "options": ["LUMITEL"]}},
+            {"choose_view": "macro"},
+            {"wait_for_table": {}},
+            {"download_table": {"format": "csv"}},
+        ]},
+        {"name": "next_page_load", "steps": [
+            {"open_menu": ["Coverage time"]},
+            {"wait": 1800},
+            {"choose_view": "macro"},
+        ]},
+    ]}
+
+
+def test_announcement_popup_is_closed_automatically(tmp_path, config, capsys):
+    results = _run(tmp_path, config, _announce_flow("1"))
+    assert [r.status for r in results] == ["PASS", "PASS"], [r.error for r in results]
+    out = capsys.readouterr().out
+    assert "closed popup 'New Delta Analysis in Map View" in out
+    # Closing it with its own button marks it as seen: it does not come back on the next page load.
+    assert out.count("closed popup") == 1
+
+
+def test_announcement_popup_without_working_close_button_is_removed(tmp_path, config, capsys):
+    results = _run(tmp_path, config, _announce_flow("stuck"))
+    assert [r.status for r in results] == ["PASS", "PASS"], [r.error for r in results]
+    assert "(removed)" in capsys.readouterr().out

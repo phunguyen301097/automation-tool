@@ -153,6 +153,97 @@ def _check_error(ctx: Context) -> None:
         pass
 
 
+# --------------------------------------------------------------------------- popups
+
+def popup_locator(page: Page, config: dict):
+    pc = config["popups"]
+    ignore = "".join(f":not({i})" for i in pc.get("ignore") or [])
+    parts = [p.strip() for p in pc["selector"].split(",") if p.strip()]
+    return page.locator(", ".join(p + ignore for p in parts))
+
+
+_dismissing: set[int] = set()  # pages currently closing a popup (the click would re-trigger the handler)
+
+
+def dismiss_popups(page: Page, config: dict, log: Callable[[str], None]) -> int:
+    """Close visible announcement popups. Returns how many were closed."""
+    if id(page) in _dismissing:
+        return 0
+    _dismissing.add(id(page))
+    try:
+        pc = config["popups"]
+        loc = popup_locator(page, config)
+        closed = 0
+        for _ in range(5):  # a popup may be followed by another one
+            popups = _visible(loc)
+            if not popups:
+                break
+            el = popups[0]
+            try:
+                title = " ".join(el.inner_text(timeout=1000).split())[:70]
+            except Exception:
+                title = "?"
+            how = _close_popup(page, el, pc)
+            log(f"  closed popup '{title}' ({how})")
+            closed += 1
+        return closed
+    finally:
+        _dismissing.discard(id(page))
+
+
+def _close_popup(page: Page, el, pc: dict) -> str:
+    def gone() -> bool:
+        try:
+            el.wait_for(state="hidden", timeout=2000)
+            return True
+        except Exception:
+            return False
+
+    buttons = _visible(el.locator(pc["close_selector"]))
+    if not buttons:
+        names = "|".join(re.escape(t) for t in pc["close_texts"])
+        buttons = _visible(el.get_by_role("button", name=re.compile(rf"^\s*(?:{names})\s*$", re.I)))
+    if buttons:
+        try:
+            buttons[0].click(timeout=3000)
+            if gone():
+                return "close button"
+        except Exception:
+            pass
+    page.keyboard.press("Escape")
+    if gone():
+        return "Escape"
+    # Last resort: remove the dialog and any backdrop that still blocks the page.
+    el.evaluate("""(el) => {
+        (el.closest('.modal, .p-dialog-mask, .swal2-container') || el).remove();
+        document.querySelectorAll('.modal-backdrop, .p-dialog-mask, .swal2-container').forEach(b => b.remove());
+        document.body.classList.remove('modal-open', 'swal2-shown');
+        document.body.style.removeProperty('overflow');
+        document.body.style.removeProperty('padding-right');
+    }""")
+    return "removed"
+
+
+def install_popup_handler(page: Page, config: dict, log: Callable[[str], None]) -> None:
+    """Let Playwright close popups automatically whenever one blocks an action."""
+    if not config["popups"].get("auto_dismiss", True):
+        return
+    try:
+        # no_wait_after: when the tool itself is clicking the popup's close button the handler
+        # does nothing, and Playwright must not wait for the popup to disappear first.
+        page.add_locator_handler(popup_locator(page, config),
+                                 lambda *_: dismiss_popups(page, config, log), no_wait_after=True)
+    except Exception as e:  # older Playwright without add_locator_handler
+        log(f"  (automatic popup handler unavailable: {e}; popups are still closed before each step)")
+
+
+@step("dismiss_popups", "close_popups")
+def dismiss_popups_step(ctx: Context, args: Any = None) -> None:
+    """Close announcement popups (runs automatically before each step)."""
+    if not dismiss_popups(ctx.page, ctx.config, ctx.log):
+        ctx.log("  no popup")
+
+
 # --------------------------------------------------------------------------- navigation
 
 @step("goto")
@@ -401,11 +492,15 @@ def _text_calendar_pick(ctx: Context, d: dt.date) -> None:
             raise StepError(f"Calendar: cannot find {d} ({res['error']}, months shown: {res.get('shown')}). "
                             f"Widget HTML saved to {path}")
         if res.get("nav"):
+            if ctx.config["popups"].get("auto_dismiss", True):
+                dismiss_popups(page, ctx.config, ctx.log)  # mouse clicks bypass the locator handler
             page.mouse.click(res["x"], res["y"])
             page.wait_for_timeout(300)
             continue
         if res["disabled"]:
             raise StepError(f"Day {d} is not selectable in the calendar (outside the dashboard's date limits?)")
+        if ctx.config["popups"].get("auto_dismiss", True) and dismiss_popups(page, ctx.config, ctx.log):
+            continue  # a popup covered the calendar; locate the day again
         page.mouse.click(res["x"], res["y"])
         page.wait_for_timeout(300)
         return

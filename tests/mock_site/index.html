@@ -82,8 +82,32 @@
   </div>
 </div>
 </div>
+<div id="changelogAnnouncer"></div>
 <script>
 const params = new URLSearchParams(location.search);
+// "What's New" announcement like the dashboard's #changelogAnnouncer.
+//   ?announce=1     : shows ~1.5 s after each page load until closed (close = seen, stored).
+//   ?announce=stuck : the close button does nothing (tests the forced removal).
+if (params.get('announce')) sessionStorage.setItem('announce', params.get('announce'));
+const announce = sessionStorage.getItem('announce');
+if (announce && localStorage.getItem('changelogSeen') !== 'delta') setTimeout(() => {
+  document.getElementById('changelogAnnouncer').innerHTML =
+    '<div class="modal fade show" role="dialog" style="display:block;position:fixed;inset:0;z-index:1050">' +
+    '<div class="modal-dialog" style="margin:80px auto;width:420px;background:#fff;padding:12px">' +
+    '<div class="modal-content"><div class="modal-header"><h5>New Delta Analysis in Map View</h5>' +
+    '<button type="button" class="btn-close" aria-label="Close">×</button></div>' +
+    '<div class="modal-body">Compare two periods on the map.</div></div></div></div>';
+  document.body.insertAdjacentHTML('beforeend',
+    '<div class="modal-backdrop show" style="position:fixed;inset:0;z-index:1040;background:rgba(0,0,0,.4)"></div>');
+  document.body.classList.add('modal-open');
+  document.querySelector('#changelogAnnouncer .btn-close').onclick = () => {
+    if (announce === 'stuck') return;
+    localStorage.setItem('changelogSeen', 'delta');
+    document.getElementById('changelogAnnouncer').innerHTML = '';
+    document.querySelector('.modal-backdrop').remove();
+    document.body.classList.remove('modal-open');
+  };
+}, 1500);
 const country = params.get('country') || 'bi';
 const carriers = {bi: ['ECONET', 'LUMITEL', 'ONAMOB'], kh: ['CELLCARD', 'METFONE', 'SMART'], ht: ['DIGICEL', 'NATCOM']};
 const $ = s => document.querySelector(s);

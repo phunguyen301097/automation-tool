@@ -80,6 +80,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "apply": ".daterangepicker .applyBtn, .drp-buttons .applyBtn",
         },
     },
+    # Announcement popups (e.g. "What's New: New Delta Analysis in Map View") that block the
+    # page are closed automatically before actions and before every step.
+    "popups": {
+        "auto_dismiss": True,
+        "selector": "#changelogAnnouncer .modal.show, #changelogAnnouncer [role=dialog], "
+                    "#changelogAnnouncer .p-dialog, .modal.show, [role=dialog][aria-modal=true], "
+                    ".p-dialog-mask .p-dialog, .swal2-popup",
+        # Dialogs a scenario may open on purpose; never auto-closed.
+        "ignore": ["#locationSourceModal", "#user_preferences_modal", "#user_account_modal"],
+        "close_selector": ".btn-close, [aria-label='Close' i], [data-bs-dismiss=modal], "
+                          ".p-dialog-header-close, .swal2-close, .close",
+        "close_texts": ["Close", "Got it", "OK", "Okay", "Dismiss", "Skip", "Later", "Not now",
+                        "Understood", "Continue", "Cerrar", "Entendido", "Aceptar"],
+    },
     # Aliases for the visualization cards ("Select a visualization mode").
     "views": {
         "macro": "#byCountry",
