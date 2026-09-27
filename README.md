@@ -51,7 +51,7 @@ Khi session hết hạn thì chạy lại lệnh này.
 
 ```bash
 weplan-export list                          # xem danh sách kịch bản
-weplan-export run                           # chạy tất cả scenarios/*.yaml
+weplan-export run                           # chạy tất cả scenarios/*.yaml (không gồm scenarios/examples/)
 weplan-export run scenarios/coverage_macro.yaml
 weplan-export run -k "coverage_*"           # lọc theo tên (glob)
 weplan-export run -t daily                  # lọc theo tag
@@ -94,6 +94,10 @@ scenarios:
       network: [ECONET, LUMITEL]
     steps: [...]
 ```
+
+**Mỗi scenario là một lần chạy độc lập** (mở menu, chọn quốc gia, ngày, filter... rồi tải file), còn mỗi tổ hợp
+trong `matrix` là một scenario riêng. Trước khi chạy, tool in danh sách scenario sẽ chạy. Muốn chạy ít hơn thì chỉ
+định file, lọc bằng `-k` / `-t`, hoặc thêm `skip: true` vào scenario không cần.
 
 Mức file còn có `before:` và `after:`: các bước chèn vào đầu và cuối mọi scenario. Thêm `skip: true` để tạm
 bỏ qua một scenario.

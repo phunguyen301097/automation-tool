@@ -101,6 +101,9 @@ try
                 }
                 return 0;
             }
+            Console.WriteLine($"Running {scenarios.Count} scenario(s):");
+            foreach (var s in scenarios) Console.WriteLine($"  - {s.Name}");
+            Console.WriteLine();
             var results = await Runner.RunAsync(scenarios, config, new RunOptions
             {
                 Headed = headed ? true : null,
