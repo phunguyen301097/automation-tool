@@ -52,6 +52,7 @@ public static class Steps
         Register(EvaluateAsync, "Run JavaScript on the page", "js", "evaluate");
         Register(PauseAsync, "Open Playwright Inspector (needs --headed)", "pause");
         Register(SetVarAsync, "Set variables: {name: value}", "set_var");
+        Register(DismissPopupsStepAsync, "Close announcement popups (runs automatically before each step)", "dismiss_popups", "close_popups");
     }
 
     private static void Register(StepFn fn, string help, params string[] names)
@@ -105,6 +106,117 @@ public static class Steps
     }
 
     private static string Safe(string s) => Regex.Replace(s, @"[^\w.\-]+", "_").Trim('_');
+
+    // ------------------------------------------------------------------ popups
+
+    public static ILocator PopupLocator(IPage page, AppConfig config)
+    {
+        var ignore = string.Concat(config.Popups.Ignore.Select(i => $":not({i})"));
+        var parts = config.Popups.Selector.Split(',').Select(p => p.Trim()).Where(p => p.Length > 0);
+        return page.Locator(string.Join(", ", parts.Select(p => p + ignore)));
+    }
+
+    /// <summary>Pages currently closing a popup (the click would re-trigger the handler).</summary>
+    private static readonly HashSet<IPage> Dismissing = new();
+
+    /// <summary>Close visible announcement popups. Returns how many were closed.</summary>
+    public static async Task<int> DismissPopupsAsync(IPage page, AppConfig config, Action<string> log)
+    {
+        lock (Dismissing)
+        {
+            if (!Dismissing.Add(page)) return 0;
+        }
+        try
+        {
+            var loc = PopupLocator(page, config);
+            var closed = 0;
+            for (var i = 0; i < 5; i++) // a popup may be followed by another one
+            {
+                var popups = await VisibleAsync(loc);
+                if (popups.Count == 0) break;
+                var el = popups[0];
+                string title;
+                try
+                {
+                    title = Regex.Replace(await el.InnerTextAsync(new() { Timeout = 1000 }), @"\s+", " ").Trim();
+                    if (title.Length > 70) title = title[..70];
+                }
+                catch (PlaywrightException)
+                {
+                    title = "?";
+                }
+                var how = await ClosePopupAsync(page, el, config.Popups);
+                log($"  closed popup '{title}' ({how})");
+                closed++;
+            }
+            return closed;
+        }
+        finally
+        {
+            lock (Dismissing) Dismissing.Remove(page);
+        }
+    }
+
+    private static async Task<string> ClosePopupAsync(IPage page, ILocator el, PopupConfig pc)
+    {
+        async Task<bool> Gone()
+        {
+            try
+            {
+                await el.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 2000 });
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        var buttons = await VisibleAsync(el.Locator(pc.CloseSelector));
+        if (buttons.Count == 0)
+        {
+            var names = string.Join("|", pc.CloseTexts.Select(Regex.Escape));
+            buttons = await VisibleAsync(el.GetByRole(AriaRole.Button,
+                new() { NameRegex = new Regex($@"^\s*(?:{names})\s*$", RegexOptions.IgnoreCase) }));
+        }
+        if (buttons.Count > 0)
+        {
+            try
+            {
+                await buttons[0].ClickAsync(new() { Timeout = 3000 });
+                if (await Gone()) return "close button";
+            }
+            catch (Exception)
+            {
+            }
+        }
+        await page.Keyboard.PressAsync("Escape");
+        if (await Gone()) return "Escape";
+        // Last resort: remove the dialog and any backdrop that still blocks the page.
+        await el.EvaluateAsync(@"(el) => {
+            (el.closest('.modal, .p-dialog-mask, .swal2-container') || el).remove();
+            document.querySelectorAll('.modal-backdrop, .p-dialog-mask, .swal2-container').forEach(b => b.remove());
+            document.body.classList.remove('modal-open', 'swal2-shown');
+            document.body.style.removeProperty('overflow');
+            document.body.style.removeProperty('padding-right');
+        }");
+        return "removed";
+    }
+
+    /// <summary>Let Playwright close popups automatically whenever one blocks an action.</summary>
+    public static async Task InstallPopupHandlerAsync(IPage page, AppConfig config, Action<string> log)
+    {
+        if (!config.Popups.AutoDismiss) return;
+        // NoWaitAfter: when the tool itself is clicking the popup's close button the handler does
+        // nothing, and Playwright must not wait for the popup to disappear first.
+        await page.AddLocatorHandlerAsync(PopupLocator(page, config),
+            async _ => await DismissPopupsAsync(page, config, log), new() { NoWaitAfter = true });
+    }
+
+    public static async Task DismissPopupsStepAsync(StepContext ctx, object? args)
+    {
+        if (await DismissPopupsAsync(ctx.Page, ctx.Config, ctx.Log) == 0) ctx.Log("  no popup");
+    }
 
     // ------------------------------------------------------------------ navigation
 
@@ -404,12 +516,16 @@ public static class Steps
             var y = res.GetProperty("y").GetDouble();
             if (res.TryGetProperty("nav", out _))
             {
+                // Mouse clicks bypass the locator handler.
+                if (ctx.Config.Popups.AutoDismiss) await DismissPopupsAsync(page, ctx.Config, ctx.Log);
                 await page.Mouse.ClickAsync((float)x, (float)y);
                 await page.WaitForTimeoutAsync(300);
                 continue;
             }
             if (res.GetProperty("disabled").GetBoolean())
                 throw new StepException($"Day {d:yyyy-MM-dd} is not selectable in the calendar (outside the dashboard's date limits?)");
+            if (ctx.Config.Popups.AutoDismiss && await DismissPopupsAsync(page, ctx.Config, ctx.Log) > 0)
+                continue; // a popup covered the calendar; locate the day again
             await page.Mouse.ClickAsync((float)x, (float)y);
             await page.WaitForTimeoutAsync(300);
             return;

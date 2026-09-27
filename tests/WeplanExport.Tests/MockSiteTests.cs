@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -416,5 +417,56 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
             """, Config(), state);
         Assert.Equal(new[] { "STOPPED", "NOT RUN" }, results.Select(r => r.Status));
         Assert.Contains("Ctrl+C", results[0].Error);
+    }
+
+    private static string AnnounceFlow(string announce) => $$"""
+        scenarios:
+          - name: with_popup
+            steps:
+              - goto: /app/bi/coverage?announce={{announce}}
+              - wait: 1800
+              - set_date: {from: 2026-08-03, to: 2026-09-14}
+              - select_filter: {id: carrier_filter, options: [LUMITEL]}
+              - choose_view: macro
+              - wait_for_table: {}
+              - download_table: {format: csv}
+          - name: next_page_load
+            steps:
+              - open_menu: ["Coverage time"]
+              - wait: 1800
+              - choose_view: macro
+        """;
+
+    private async Task<(List<ScenarioResult> Results, string Log)> RunCapturedAsync(string yaml)
+    {
+        var original = Console.Out;
+        var writer = new StringWriter();
+        Console.SetOut(writer);
+        try
+        {
+            return (await RunYamlAsync(yaml, Config()), writer.ToString());
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
+    }
+
+    [Fact]
+    public async Task AnnouncementPopup_IsClosedAutomatically()
+    {
+        var (results, log) = await RunCapturedAsync(AnnounceFlow("1"));
+        Assert.Equal(new[] { "PASS", "PASS" }, results.Select(r => r.Status));
+        Assert.Contains("closed popup 'New Delta Analysis in Map View", log);
+        // Closing it with its own button marks it as seen: it does not come back on the next page load.
+        Assert.Single(Regex.Matches(log, "closed popup"));
+    }
+
+    [Fact]
+    public async Task AnnouncementPopup_WithoutWorkingCloseButton_IsRemoved()
+    {
+        var (results, log) = await RunCapturedAsync(AnnounceFlow("stuck"));
+        Assert.Equal(new[] { "PASS", "PASS" }, results.Select(r => r.Status));
+        Assert.Contains("(removed)", log);
     }
 }

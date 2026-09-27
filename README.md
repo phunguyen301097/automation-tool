@@ -69,6 +69,12 @@ weplan-export steps                         # danh sách các loại bước
 - **Đóng cửa sổ trình duyệt** (khi `--headed`) hoặc bấm **Ctrl+C** trong terminal sẽ **dừng cả lượt chạy**: scenario
   đang chạy ghi `STOPPED`, các scenario còn lại ghi `NOT RUN`, báo cáo vẫn được in và lưu.
 
+**Popup thông báo** (ví dụ "What's New: *New Delta Analysis in Map View*") được **tự đóng**: trước mỗi bước và
+bất cứ khi nào popup che thao tác click, tool bấm nút đóng (`×` / Close / OK / Got it...), không được thì bấm Esc,
+cuối cùng xoá popup khỏi trang. Log ghi `closed popup '...'`. Session được lưu lại sau khi chạy nên popup đã đóng
+thường không hiện lại. Tắt bằng `popups.auto_dismiss: false`; selector nằm ở `Popups` trong
+`src/WeplanExport/AppConfig.cs`. Có thể gọi thủ công bằng bước `- dismiss_popups: {}`.
+
 File được lưu vào thư mục `downloads/` (đổi ở `output_dir`). Cuối mỗi lần chạy sẽ in bảng PASS/FAIL, còn
 `downloads/_runs/<thời gian>/report.json` chứa chi tiết. Nếu một kịch bản lỗi, tool chụp màn hình và lưu HTML
 của trang tại thời điểm lỗi vào cùng thư mục đó, rồi chạy tiếp các kịch bản còn lại (dùng `-x` để dừng ngay).

@@ -181,6 +181,7 @@ public static class Runner
         var ctx = await NewContextAsync(browser, config);
         KeepManualDownloads(ctx, config);
         var page = await ctx.NewPageAsync();
+        await Steps.InstallPopupHandlerAsync(page, config, Log);
 
         async Task Dump(string name, string? css = null)
         {
@@ -289,6 +290,7 @@ public static class Runner
                 page = await ctx.NewPageAsync();
                 state.WatchPage(page);
                 state.CurrentPage = page;
+                await Steps.InstallPopupHandlerAsync(page, config, Log);
             }
             var sessionChecked = false;
             var previousFailed = false;
@@ -309,6 +311,7 @@ public static class Runner
                     page = await ctx.NewPageAsync();
                     state.WatchPage(page);
                     state.CurrentPage = page;
+                    await Steps.InstallPopupHandlerAsync(page, config, Log);
                     sessionChecked = false;
                 }
                 else if (opts.Trace)
@@ -341,6 +344,8 @@ public static class Runner
                         if (!Steps.Registry.TryGetValue(step.Name, out var def))
                             throw new StepException($"Unknown step '{step.Name}'. Available: {string.Join(", ", Steps.Registry.Keys.Order())}");
                         Log($"- {current}");
+                        if (config.Popups.AutoDismiss && step.Name is not ("dismiss_popups" or "close_popups"))
+                            await Steps.DismissPopupsAsync(page!, config, Log);
                         await def.Run(sctx, step.Args);
                     }
                     res.Ok = true;
@@ -410,6 +415,8 @@ public static class Runner
                     : $"=== {res.Status} {sc.Name} ({res.Seconds}s)");
                 if (opts.StopOnFail && !res.Ok) state.Stop("--stop-on-fail");
             }
+            // Keep the refreshed session (cookies, "announcement seen" flags) for the next run.
+            if (!isolated && page is not null && state.StopReason is null) await SaveSessionAsync(page, config);
         }
         finally
         {
@@ -430,6 +437,19 @@ public static class Runner
 
         WriteReport(results, artifactsDir, state.StopReason);
         return results;
+    }
+
+    private static async Task SaveSessionAsync(IPage page, AppConfig config)
+    {
+        if (!config.Auth.Required) return;
+        try
+        {
+            if (!page.IsClosed && await IsLoggedInAsync(page, config))
+                await page.Context.StorageStateAsync(new() { Path = config.Auth.StorageState });
+        }
+        catch (PlaywrightException)
+        {
+        }
     }
 
     private static async Task EnsureSessionAsync(IPage page, AppConfig config)

@@ -14,6 +14,7 @@ public class AppConfig
     public TimeoutConfig Timeouts { get; set; } = new();
     public SelectorConfig Selectors { get; set; } = new();
     public DateConfig Date { get; set; } = new();
+    public PopupConfig Popups { get; set; } = new();
 
     /// <summary>Aliases for the visualization cards ("Select a visualization mode").</summary>
     public Dictionary<string, string> Views { get; set; } = new()
@@ -125,4 +126,25 @@ public class CalendarConfig
         ".daterangepicker .drp-calendar.left td.available:not(.off), .daterangepicker .calendar.left td.available:not(.off), " +
         "td:not(.p-datepicker-other-month):not(.p-datepicker-day-cell-other-month) > span";
     public string? Apply { get; set; } = ".daterangepicker .applyBtn, .drp-buttons .applyBtn";
+}
+
+/// <summary>
+/// Announcement popups (e.g. "What's New: New Delta Analysis in Map View") that block the page
+/// are closed automatically before actions and before every step.
+/// </summary>
+public class PopupConfig
+{
+    public bool AutoDismiss { get; set; } = true;
+    public string Selector { get; set; } =
+        "#changelogAnnouncer .modal.show, #changelogAnnouncer [role=dialog], #changelogAnnouncer .p-dialog, " +
+        ".modal.show, [role=dialog][aria-modal=true], .p-dialog-mask .p-dialog, .swal2-popup";
+    /// <summary>Dialogs a scenario may open on purpose; never auto-closed.</summary>
+    public List<string> Ignore { get; set; } = new() { "#locationSourceModal", "#user_preferences_modal", "#user_account_modal" };
+    public string CloseSelector { get; set; } =
+        ".btn-close, [aria-label='Close' i], [data-bs-dismiss=modal], .p-dialog-header-close, .swal2-close, .close";
+    public List<string> CloseTexts { get; set; } = new()
+    {
+        "Close", "Got it", "OK", "Okay", "Dismiss", "Skip", "Later", "Not now", "Understood", "Continue",
+        "Cerrar", "Entendido", "Aceptar",
+    };
 }
