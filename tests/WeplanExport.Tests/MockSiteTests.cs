@@ -514,4 +514,36 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
             }
         }
     }
+
+    [Theory]
+    [InlineData("network_availability.yaml", "Network availability", "/app/bi/networkAvailabilityMobile", true)]
+    [InlineData("sample.yaml", "Sample", "/app/bi/sample", false)]
+    [InlineData("speed_test_throughput.yaml", "Speed test Throughput", "/app/bi/speedTestThruMobile", true)]
+    [InlineData("web_performance_times.yaml", "Web performance times", "/app/bi/webPerformanceTimesMobile", true)]
+    [InlineData("video_streaming_times.yaml", "Video Streaming times", "/app/bi/youtubeTimesMobile", true)]
+    public async Task MonthlyPageScenarios(string fileName, string kpi, string path, bool split)
+    {
+        var config = Config();
+        var results = await Runner.RunAsync(ScenarioLoader.Load(new[] { RepoFile($"scenarios/{fileName}") }),
+            config, new RunOptions());
+        var techs = split ? new[] { "All", "5G", "4G" } : new[] { "All" };
+        Assert.True(results.All(r => r.Status == "PASS"), string.Join("; ", results.Select(r => $"{r.Scenario}: {r.Error}")));
+        Assert.Equal(2 * techs.Length, results.Count);
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var last = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
+        foreach (var (level, view) in new[] { ("Net", "byCountry"), ("Province", "byRegions") })
+        {
+            foreach (var tech in techs)
+            {
+                var file = Path.Combine(config.OutputDir, $"VTB_{last.Year}_T{last.Month}_{kpi}_{level}_{tech}.xlsx");
+                Assert.True(File.Exists(file), file);
+                var data = ReadXlsx(file);
+                Assert.Equal(path, data["kpi"]);
+                Assert.Equal(view, data["view"]);
+                Assert.Equal("ECONET|LUMITEL|ONAMOB|SMART", data["carrier"]);
+                if (tech == "4G") Assert.Equal("4G", data["coverage"]);
+            }
+        }
+    }
 }

@@ -146,7 +146,18 @@ steps:
   - download_table: {format: xlsx, filename: "VTB_${year}_T${month}_Coverage time_Net_${tech.name}"}
 ```
 
-Xem `scenarios/coverage_time.yaml` (Coverage time: mức toàn mạng + mức tỉnh × All/5G/4G = 6 file) làm mẫu.
+Các kịch bản hàng tháng có sẵn (mỗi file: mức toàn mạng + mức tỉnh × All/5G/4G, xuất As XLSX):
+
+| File | Trang | Số file |
+|---|---|---|
+| `scenarios/coverage_time.yaml` | Coverage time | 6 |
+| `scenarios/network_availability.yaml` | Network availability – Mobile (Cellular) | 6 |
+| `scenarios/sample.yaml` | Sample (không có Coverage type → chỉ All) | 2 |
+| `scenarios/speed_test_throughput.yaml` | Speed test – Throughput Mobile (Cellular) | 6 |
+| `scenarios/web_performance_times.yaml` | Web performance – Mobile (Cellular) – Times | 6 |
+| `scenarios/video_streaming_times.yaml` | Video Streaming – Mobile (Cellular) – Times | 6 |
+
+Chạy riêng một trang: `run scenarios/sample.yaml` hoặc theo tag, ví dụ `-t speed_test`; chạy tất cả: `-t monthly`.
 
 **Ngày** nhận các dạng `2026-08-01`, `01/08/2026`, `today`, `today-7d`, `max` (ngày mới nhất có dữ liệu,
 lấy từ `window.dateLimits` của trang), `max-30d`, `max-1m`, `min`.
