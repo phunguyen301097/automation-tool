@@ -88,11 +88,12 @@ public static partial class ScenarioLoader
         return scenarios.OrderBy(s => codes.IndexOf(Code(s.Vars.GetValueOrDefault("market")))).ToList();
     }
 
-    public static List<Scenario> Filter(List<Scenario> scenarios, List<string> only, List<string> tags)
+    public static List<Scenario> Filter(List<Scenario> scenarios, List<string> only, List<string> tags, List<string>? exclude = null)
     {
         IEnumerable<Scenario> q = scenarios;
         if (only.Count > 0) q = q.Where(s => only.Any(p => Glob(p).IsMatch(s.Name)));
         if (tags.Count > 0) q = q.Where(s => s.Tags.Intersect(tags).Any());
+        if (exclude is { Count: > 0 }) q = q.Where(s => !exclude.Any(p => Glob(p).IsMatch(s.Name)));
         return q.ToList();
     }
 

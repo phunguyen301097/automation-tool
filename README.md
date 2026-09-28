@@ -54,6 +54,7 @@ weplan-export list                          # xem danh sách kịch bản
 weplan-export run                           # chạy tất cả scenarios/*.yaml (không gồm scenarios/examples/)
 weplan-export run scenarios/coverage_macro.yaml
 weplan-export run -k "coverage_*"           # lọc theo tên (glob)
+weplan-export run -e "VTB_Sample_*"               # chạy tất cả, TRỪ các kịch bản khớp mẫu (lặp lại -e được)
 weplan-export run -t daily                  # lọc theo tag
 weplan-export run --headed --slow-mo 300    # xem trình duyệt chạy, chậm lại để quan sát
 weplan-export run --trace                   # ghi Playwright trace để debug

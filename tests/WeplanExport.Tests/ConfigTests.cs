@@ -155,4 +155,22 @@ public class ConfigTests
         var first = Assert.IsType<Dictionary<string, object?>>(markets[0]);
         Assert.Equal("kh", first["country"]);
     }
+
+    [Fact]
+    public void ExcludeFilter()
+    {
+        var file = Path.GetTempFileName();
+        File.WriteAllText(file, """
+            scenarios:
+              - name: ${m}_${k}
+                matrix: {m: [VTB, VTC], k: [Coverage time, Sample]}
+                steps: []
+            """);
+        var sc = ScenarioLoader.Load(new[] { file });
+        File.Delete(file);
+        Assert.Equal(new[] { "VTB_Coverage time", "VTC_Coverage time", "VTC_Sample" },
+            ScenarioLoader.Filter(sc, new(), new(), new() { "VTB_Sample" }).Select(s => s.Name));
+        Assert.Equal(new[] { "VTC_Coverage time" },
+            ScenarioLoader.Filter(sc, new() { "VTC_*" }, new(), new() { "*_Sample" }).Select(s => s.Name));
+    }
 }

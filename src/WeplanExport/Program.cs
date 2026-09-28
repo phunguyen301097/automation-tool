@@ -11,6 +11,7 @@ Commands:
                                 save rendered HTML + screenshots of the date widget and result table
   run [files...]                run scenarios (default: scenarios/*.yaml)
       -k, --only <glob>         only scenarios whose name matches (repeatable)
+      -e, --exclude <glob>      skip scenarios whose name matches (repeatable)
       -t, --tag <tag>           only scenarios with this tag (repeatable)
       --headed                  show the browser
       --slow-mo <ms>            slow down each action
@@ -38,6 +39,7 @@ if (rest.Count == 0 || rest[0] is "-h" or "--help")
 var command = rest[0];
 var files = new List<string>();
 var only = new List<string>();
+var exclude = new List<string>();
 var tags = new List<string>();
 bool headed = false, trace = false, stopOnFail = false, dryRun = false, isolated = false;
 int? slowMo = null;
@@ -47,6 +49,7 @@ for (var i = 1; i < rest.Count; i++)
     switch (rest[i])
     {
         case "-k" or "--only": only.Add(rest[++i]); break;
+        case "-e" or "--exclude": exclude.Add(rest[++i]); break;
         case "-t" or "--tag": tags.Add(rest[++i]); break;
         case "--headed": headed = true; break;
         case "--slow-mo": slowMo = int.Parse(rest[++i]); break;
@@ -87,7 +90,7 @@ try
             return 0;
 
         case "run":
-            var scenarios = ScenarioLoader.Filter(LoadOrdered(), only, tags);
+            var scenarios = ScenarioLoader.Filter(LoadOrdered(), only, tags, exclude);
             if (scenarios.Count == 0)
             {
                 Console.Error.WriteLine("No scenario matched");
