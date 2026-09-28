@@ -64,3 +64,20 @@ def test_matrix_values_can_be_mappings(tmp_path):
     assert sc[0].steps[0]["select_filter"]["options"] == ["4G", "3G"]
     # ${year} is only known at run time and stays for later.
     assert sc[0].steps[1]["download_table"]["filename"] == "Coverage time_Net_${year}"
+
+
+def test_markets_from_global_vars(tmp_path):
+    import pytest
+    from weplan_export.config import order_by_market
+    f = tmp_path / "s.yaml"
+    f.write_text(yaml.safe_dump({"scenarios": [
+        {"name": "${market.code}_${t}", "matrix": {"market": "${markets}", "t": ["a", "b"]},
+         "steps": [{"select_country": "${market.country}"}]}]}))
+    markets = [{"code": "VTC", "country": "kh"}, {"code": "VTB", "country": "bi"}]
+    sc = load_scenarios([f], {"markets": markets})
+    assert [s.name for s in sc] == ["VTC_a", "VTC_b", "VTB_a", "VTB_b"]
+    assert sc[2].steps == [{"select_country": "bi"}]
+    reordered = order_by_market(list(reversed(sc)), markets)
+    assert [s.name for s in reordered] == ["VTC_b", "VTC_a", "VTB_b", "VTB_a"]
+    with pytest.raises(ValueError, match="unknown variable"):
+        load_scenarios([f])  # no markets defined

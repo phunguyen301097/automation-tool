@@ -1,37 +1,38 @@
-# Sample  (2 file, theo Weplan_export.docx)
+# Sample  (2 file mỗi thị trường, theo Weplan_export.docx)
 #
+#   Chạy cho mọi thị trường trong config.yaml (vars.markets): VTC, STL, VTL, MYN, VTB, VTZ, MVT, NCM
 #   Lần 1 - mức toàn mạng (Net): Macro data      Lần 2 - mức tỉnh (Province): By provinces
 #
 #     VTB_2026_T8_Sample_Net_All                   VTB_2026_T8_Sample_Province_All
 #
-# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
+# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ, lưu trong downloads/<mã thị trường>/
 #
 # Trang Sample không có Coverage type: chỉ mức All.
 #
 # Chạy:  python -m weplan_export run scenarios/sample.yaml
+#        python -m weplan_export run scenarios/sample.yaml -k "VTC_*"     (chỉ một thị trường)
 
 vars:
-  market: VTB
-  country: Burundi
   kpi: Sample
   page: /app/bi/sample
 
 scenarios:
-  - name: ${market}_${kpi}_${level.name}_${tech.name}
+  - name: ${market.code}_${kpi}_${level.name}_${tech.name}
     tags: [sample, monthly]
     matrix:
+      market: "${markets}"               # mọi thị trường trong config.yaml
       level:                               # Mức: toàn mạng / tỉnh
         - {name: Net, view: macro}         #   Macro data
         - {name: Province, view: admin_1}  #   By provinces
       tech:
         - {name: All}
     steps:
+      - select_country: ${market.country}                     # chọn quốc gia của thị trường
       - open_menu: ${page}
-      - select_country: ${country}
       - set_date: {preset: Last month}                          # chọn Date: Last month
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - choose_view: ${level.view}                              # Macro data / By provinces
       - wait_for_table: {}
       - download_table:                                         # Download table -> As XLSX
           format: xlsx
-          filename: "${market}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"
+          filename: "${market.code}/${market.code}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"

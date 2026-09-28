@@ -6,7 +6,7 @@ import glob
 import sys
 
 from .actions import STEPS
-from .config import filter_scenarios, load_config, load_scenarios
+from .config import filter_scenarios, load_config, load_scenarios, order_by_market
 
 
 def _scenario_files(patterns: list[str]) -> list[str]:
@@ -66,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{name:16} {doc[0] if doc else ''}")
         return 0
 
-    scenarios = load_scenarios(_scenario_files(args.files))
+    scenarios = load_scenarios(_scenario_files(args.files), config.get("vars"))
+    scenarios = order_by_market(scenarios, (config.get("vars") or {}).get("markets"))
 
     if args.cmd == "list":
         for s in scenarios:

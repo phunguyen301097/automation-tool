@@ -364,34 +364,6 @@ def test_announcement_popup_without_working_close_button_is_removed(tmp_path, co
     assert "(removed)" in capsys.readouterr().out
 
 
-def test_coverage_time_monthly_scenarios(config):
-    """The real scenarios/coverage_time.yaml: 2 levels x 3 technologies, named files."""
-    import datetime as dt
-    scenario_file = Path(__file__).parent.parent / "scenarios" / "coverage_time.yaml"
-    results = run_scenarios(load_scenarios([scenario_file]), config)
-    assert [r.status for r in results] == ["PASS"] * 6, [r.error for r in results]
-
-    today = dt.date.today()
-    last = today.replace(day=1) - dt.timedelta(days=1)
-    first = last.replace(day=1)
-    expected_coverage = {
-        "All": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
-        "5G": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED",
-        "4G": "4G",
-    }
-    out = Path(config["output_dir"])
-    for level, view in (("Net", "byCountry"), ("Province", "byRegions")):
-        for tech, coverage in expected_coverage.items():
-            f = out / f"VTB_{last.year}_T{last.month}_Coverage time_{level}_{tech}.xlsx"
-            assert f.exists(), f
-            data = _xlsx_dict(f)
-            assert data["country"] == "bi"
-            assert data["date"] == f"{first.isoformat()}..{last.isoformat()}"
-            assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
-            assert data["coverage"] == coverage
-            assert data["view"] == view
-
-
 # file -> (page path, [(name part after VTB_<year>_T<month>_, expected mock state)])
 _COV = {"All": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
         "5G": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED", "4G": "4G"}
@@ -402,6 +374,7 @@ def _coverage_kpi(kpi):
 
 
 KPI_SCENARIOS = {
+    "coverage_time.yaml": ("/app/bi/coverage", _coverage_kpi("Coverage time")),
     "signal_strength.yaml": ("/app/bi/signal", _coverage_kpi("Signal strength")),
     "data_traffic.yaml": ("/app/bi/traffic", _coverage_kpi("Data traffic")),
     "latency.yaml": ("/app/bi/latencyMobile", _coverage_kpi("Latency")),
@@ -429,11 +402,12 @@ def test_monthly_kpi_scenarios(config, file_name):
     import datetime as dt
     path, expected = KPI_SCENARIOS[file_name]
     scenario_file = Path(__file__).parent.parent / "scenarios" / file_name
-    results = run_scenarios(load_scenarios([scenario_file]), config)
+    markets = {"markets": [{"code": "VTB", "country": "bi", "name": "Burundi"}]}
+    results = run_scenarios(load_scenarios([scenario_file], markets), config)
     assert [r.status for r in results] == ["PASS"] * len(expected), [r.error for r in results]
 
     last = dt.date.today().replace(day=1) - dt.timedelta(days=1)
-    out = Path(config["output_dir"])
+    out = Path(config["output_dir"]) / "VTB"
     assert len(list(out.glob("*.xlsx"))) == len(expected)
     for name, state in expected:
         f = out / f"VTB_{last.year}_T{last.month}_{name}.xlsx"
@@ -444,3 +418,44 @@ def test_monthly_kpi_scenarios(config, file_name):
         assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
         for key, value in state.items():
             assert (data.get(key) or "") == value, (name, key)
+
+
+def test_scenarios_run_for_each_market(config):
+    """Markets from config.yaml: country switched per market, files per market folder, market by market."""
+    import datetime as dt
+    from weplan_export.config import order_by_market
+    markets = [{"code": "VTC", "country": "kh", "name": "Cambodia"},
+               {"code": "VTB", "country": "bi", "name": "Burundi"}]
+    files = [Path(__file__).parent.parent / "scenarios" / f for f in ("sample.yaml", "coverage_time.yaml")]
+    scenarios = order_by_market(load_scenarios(files, {"markets": markets}), markets)
+    assert [s.name.split("_")[0] for s in scenarios] == ["VTC"] * 8 + ["VTB"] * 8
+    results = run_scenarios(scenarios, config)
+    assert all(r.status == "PASS" for r in results), [r.error for r in results]
+
+    last = dt.date.today().replace(day=1) - dt.timedelta(days=1)
+    out = Path(config["output_dir"])
+    carriers = {"VTC": ("kh", "CELLCARD|METFONE|SMART"), "VTB": ("bi", "ECONET|LUMITEL|ONAMOB|SMART")}
+    for code, (country, carrier) in carriers.items():
+        got = sorted(f.name for f in (out / code).glob("*.xlsx"))
+        assert len(got) == 8, got
+        for f in (out / code).glob("*.xlsx"):
+            assert f.name.startswith(f"{code}_{last.year}_T{last.month}_")
+            data = _xlsx_dict(f)
+            assert data["country"] == country, f.name
+            assert data["carrier"] == carrier, f.name
+
+
+def test_empty_table_is_exported_with_warning(tmp_path, config, capsys):
+    doc = {"scenarios": [{"name": "haiti_5g", "steps": [
+        {"select_country": "ht"},
+        {"goto": "/app/bi/coverage"},
+        {"set_date": {"preset": "Last month"}},
+        {"select_filter": {"id": "coverage_filter", "options": ["5G_SA"]}},
+        {"choose_view": "macro"},
+        {"wait_for_table": {"empty_after_ms": 3000}},
+        {"download_table": {"format": "xlsx", "filename": "empty"}},
+    ]}]}
+    r = _run(tmp_path, config, doc)[0]
+    assert r.ok, r.error
+    assert "table is empty" in capsys.readouterr().out
+    assert Path(r.downloads[0]["file"]).name == "empty.xlsx"

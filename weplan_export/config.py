@@ -181,24 +181,30 @@ def _expand_matrix(matrix: dict[str, list] | None) -> list[dict]:
     return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
 
 
-def load_scenarios(paths: list[str | Path]) -> list[Scenario]:
+def load_scenarios(paths: list[str | Path], global_vars: dict[str, Any] | None = None) -> list[Scenario]:
     """Load scenario files. A file may contain `vars`, `before`, `after` and `scenarios`.
 
     Each scenario may carry its own `vars` and a `matrix`, which produces one
-    scenario per combination of values.
+    scenario per combination of values. `global_vars` (config.yaml `vars`) are
+    available to every file, e.g. the list of markets: `matrix: {market: "${markets}"}`.
     """
     result: list[Scenario] = []
     for p in paths:
         p = Path(p)
         doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        file_vars = doc.get("vars", {}) or {}
+        file_vars = {**(global_vars or {}), **(doc.get("vars", {}) or {})}
         before = doc.get("before", []) or []
         after = doc.get("after", []) or []
         for raw in doc.get("scenarios", []) or []:
             if raw.get("skip"):
                 continue
-            for combo in _expand_matrix(raw.get("matrix")):
-                variables = {**file_vars, **(raw.get("vars") or {}), **combo}
+            base_vars = {**file_vars, **(raw.get("vars") or {})}
+            matrix = render(raw.get("matrix"), base_vars)
+            for key, values in (matrix or {}).items():
+                if isinstance(values, str) and "${" in values:
+                    raise ValueError(f"{p}: matrix '{key}' uses an unknown variable: {values}")
+            for combo in _expand_matrix(matrix):
+                variables = {**base_vars, **combo}
                 name = render(raw.get("name", p.stem), variables)
                 if combo and "${" not in str(raw.get("name", "")):
                     label = lambda v: str(v.get("name", v)) if isinstance(v, dict) else str(v)
@@ -208,6 +214,20 @@ def load_scenarios(paths: list[str | Path]) -> list[Scenario]:
                 result.append(Scenario(name=name, steps=steps, vars=variables,
                                        source=str(p), tags=raw.get("tags", []) or []))
     return result
+
+
+def order_by_market(scenarios: list[Scenario], markets: list | None) -> list[Scenario]:
+    """Run market by market (order of config.yaml `markets`): one country switch per market."""
+    if not markets:
+        return scenarios
+    codes = [m.get("code") if isinstance(m, dict) else m for m in markets]
+
+    def key(s: Scenario) -> int:
+        m = s.vars.get("market")
+        code = m.get("code") if isinstance(m, dict) else m
+        return codes.index(code) if code in codes else -1
+
+    return sorted(scenarios, key=key)  # stable: KPI order within a market is kept
 
 
 def filter_scenarios(scenarios: list[Scenario], only: list[str] | None, tags: list[str] | None) -> list[Scenario]:

@@ -842,14 +842,18 @@ def choose_view(ctx: Context, args: Any) -> None:
 
 @step("wait_for_table", "wait_data")
 def wait_for_table(ctx: Context, args: Any = None) -> None:
-    """Wait until #results is shown and the table has rows."""
+    """Wait until #results is shown and the table has rows (or stays empty: no data for the filters)."""
     args = args or {}
     page = ctx.page
     timeout = args.get("timeout", ctx.timeouts["data_load"])
     min_rows = args.get("min_rows", 1)
+    # Results shown, nothing loading and still no rows after this long -> the table is empty
+    # (e.g. no 5G measurements in a market). 0 disables it.
+    empty_after = args.get("empty_after_ms", 20_000) / 1000
     deadline = time.time() + timeout / 1000
     rows_sel = args.get("rows", ctx.sel["table_rows"])
     t0 = time.time()
+    empty_since = None
     while True:
         _check_error(ctx)
         results_visible = page.locator(ctx.sel["results"]).first.is_visible()
@@ -862,6 +866,14 @@ def wait_for_table(ctx: Context, args: Any = None) -> None:
                 loading = False
         if results_visible and rows >= min_rows and not loading:
             break
+        if results_visible and rows == 0 and not loading and empty_after:
+            empty_since = empty_since or time.time()
+            if time.time() - empty_since >= empty_after:
+                ctx.vars["rows"] = 0
+                ctx.log(f"  WARNING: table is empty (no data for these filters) after {time.time()-t0:.1f}s")
+                return
+        else:
+            empty_since = None
         if time.time() > deadline:
             raise StepError(f"Timed out after {timeout/1000:.0f}s waiting for table "
                             f"(results visible={results_visible}, rows={rows}, loading={loading})")
@@ -948,7 +960,7 @@ def download_table(ctx: Context, args: Any = None) -> None:
     size = target.stat().st_size
     ctx.log(f"  saved {target} ({size:,} bytes, server name '{suggested}')")
     info = {"file": str(target), "bytes": size, "suggested": suggested}
-    if args.get("verify", True):
+    if args.get("verify", True) and ctx.vars.get("rows") != 0:
         info["data_rows"] = _verify_file(target)
         ctx.log(f"  verified: {info['data_rows']} data rows")
     ctx.downloads.append(info)

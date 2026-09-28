@@ -5,6 +5,20 @@ base_url: https://dashboard.weplananalytics.com
 start_path: /app/bi/coverage
 output_dir: downloads            # nơi lưu file tải về
 
+# Biến dùng chung cho mọi file kịch bản.
+vars:
+  # Thị trường chạy cho mọi KPI: code = mã trong tên file, country = mã quốc gia trong ô chọn
+  # quốc gia của dashboard (kh, la, tl, mm, bi, tz, mz, ht). Bỏ / thêm dòng để đổi danh sách.
+  markets:
+    - {code: VTC, country: kh, name: Cambodia}
+    - {code: STL, country: la, name: Laos}
+    - {code: VTL, country: tl, name: Timor-Leste}
+    - {code: MYN, country: mm, name: Myanmar}
+    - {code: VTB, country: bi, name: Burundi}
+    - {code: VTZ, country: tz, name: Tanzania}
+    - {code: MVT, country: mz, name: Mozambique}
+    - {code: NCM, country: ht, name: Haiti}
+
 auth:
   storage_state: .auth/state.json  # session đăng nhập (tạo bằng lệnh `login`)
 

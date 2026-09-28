@@ -223,7 +223,7 @@ class _RunState:
             self.stop_reason = reason
 
 
-_FIRST_NAV_STEPS = {"goto", "open_menu", "menu"}
+_FIRST_NAV_STEPS = {"goto", "open_menu", "menu", "select_country", "country"}
 
 
 def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None = None,

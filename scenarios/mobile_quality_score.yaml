@@ -1,35 +1,36 @@
-# Mobile Quality Score  (6 file, theo Weplan_export.docx)
+# Mobile Quality Score  (6 file mỗi thị trường, theo Weplan_export.docx)
 #
+#   Chạy cho mọi thị trường trong config.yaml (vars.markets): VTC, STL, VTL, MYN, VTB, VTZ, MVT, NCM
 #   Lần 1 - mức toàn mạng (Net): Macro data      Lần 2 - mức tỉnh (Province): By provinces
 #
 #     VTB_2026_T8_Excellent_Net_All                VTB_2026_T8_Excellent_Province_All
 #     VTB_2026_T8_Sufficient_Net_All               VTB_2026_T8_Sufficient_Province_All
 #     VTB_2026_T8_Insufficient_Net_All             VTB_2026_T8_Insufficient_Province_All
 #
-# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
+# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ, lưu trong downloads/<mã thị trường>/
 #
 # Tên file dùng mức Mobile Quality Score thay cho Loại KPI (theo ví dụ trong kịch bản).
 # Filter được tìm theo nhãn "Mobile Quality Score" trên trang.
 #
 # Chạy:  python -m weplan_export run scenarios/mobile_quality_score.yaml
+#        python -m weplan_export run scenarios/mobile_quality_score.yaml -k "VTC_*"     (chỉ một thị trường)
 
 vars:
-  market: VTB
-  country: Burundi
   kpi: Mobile Quality Score
   page: /app/bi/compositeMobileQualityScore
 
 scenarios:
-  - name: ${market}_${kpi}_${level.name}_${quality}
+  - name: ${market.code}_${kpi}_${level.name}_${quality}
     tags: [mobile_quality_score, monthly]
     matrix:
+      market: "${markets}"               # mọi thị trường trong config.yaml
       level:                               # Mức: toàn mạng / tỉnh
         - {name: Net, view: macro}         #   Macro data
         - {name: Province, view: admin_1}  #   By provinces
       quality: [Excellent, Sufficient, Insufficient]   # lọc Mobile Quality Score
     steps:
+      - select_country: ${market.country}                     # chọn quốc gia của thị trường
       - open_menu: ${page}
-      - select_country: ${country}
       - set_date: {preset: Last month}                          # chọn Date: Last month
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - select_filter: {label: "Mobile Quality Score", options: ["${quality}"]}
@@ -37,4 +38,4 @@ scenarios:
       - wait_for_table: {}
       - download_table:                                         # Download table -> As XLSX
           format: xlsx
-          filename: "${market}_${year}_T${month}_${quality}_${level.name}_All"
+          filename: "${market.code}/${market.code}_${year}_T${month}_${quality}_${level.name}_All"

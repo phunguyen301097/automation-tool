@@ -123,7 +123,9 @@ if (announce && localStorage.getItem('changelogSeen') !== 'delta') setTimeout(()
     document.body.classList.remove('modal-open');
   };
 }, 1500);
-const country = params.get('country') || 'bi';
+// The dashboard remembers the chosen country across pages.
+const country = params.get('country') || sessionStorage.getItem('country') || 'bi';
+sessionStorage.setItem('country', country);
 const carriers = {bi: ['ECONET', 'LUMITEL', 'ONAMOB', 'SMART'], kh: ['CELLCARD', 'METFONE', 'SMART'], ht: ['DIGICEL', 'NATCOM']};
 const $ = s => document.querySelector(s);
 document.getElementById('kpiTitle').textContent = location.pathname;
@@ -299,7 +301,8 @@ function runQuery(view) {
     const st = state();
     const tbody = $('#tableProvinces tbody');
     tbody.innerHTML = '';
-    const names = st.carrier ? st.carrier.split('|') : carriers[country];
+    let names = st.carrier ? st.carrier.split('|') : carriers[country];
+    if (country === 'ht' && st.coverage && !/4G|3G|2G/.test(st.coverage)) names = [];  // no 5G data in Haiti
     for (const n of names) tbody.insertAdjacentHTML('beforeend', `<tr><td>${n}</td><td>${Math.round(Math.random()*100)}</td></tr>`);
     $('#loader').classList.add('d-none');
     $('#results').classList.remove('d-none');
