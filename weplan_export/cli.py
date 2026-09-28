@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--isolated", action="store_true",
                    help="fresh browser context per scenario (default: all scenarios share one page)")
     r.add_argument("--dry-run", action="store_true", help="only print the expanded scenarios")
+    r.add_argument("--resume", nargs="?", const="latest", default=None, metavar="RUN",
+                   help="skip scenarios already finished in the latest run (or in downloads/_runs/RUN) "
+                        "and run the rest")
     r.add_argument("--order", choices=["page", "market"], default=None,
                    help="page: each page for all markets, then the next page (default); "
                         "market: all pages of one market, then the next market")
@@ -82,6 +85,19 @@ def main(argv: list[str] | None = None) -> int:
     scenarios = filter_scenarios(scenarios, args.only, args.tag, args.exclude)
     if not scenarios:
         sys.exit("No scenario matched")
+    done: list[str] = []
+    if args.resume:
+        from .runner import completed_in_last_run
+        report, finished = completed_in_last_run(config["output_dir"], args.resume)
+        if report is None:
+            sys.exit(f"--resume: no earlier run report found in {config['output_dir']}/_runs")
+        done = [s.name for s in scenarios if s.name in finished]
+        scenarios = [s for s in scenarios if s.name not in finished]
+        print(f"Resuming from {report}: {len(done)} scenario(s) already done, {len(scenarios)} left.")
+        if not scenarios:
+            print("Nothing left to run.")
+            return 0
+
     if args.dry_run:
         import yaml
         for s in scenarios:
@@ -97,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         results = run_scenarios(scenarios, config, headed=True if args.headed else None,
                             slow_mo=args.slow_mo, trace=args.trace, stop_on_fail=args.stop_on_fail,
-                            isolated=True if args.isolated else None)
+                            isolated=True if args.isolated else None, done=done)
     except KeyboardInterrupt:
         return 130
     return 0 if all(r.ok for r in results) else 1

@@ -228,21 +228,36 @@ _FIRST_NAV_STEPS = {"goto", "open_menu", "menu", "select_country", "country"}
 
 def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None = None,
                   slow_mo: int | None = None, trace: bool = False, stop_on_fail: bool = False,
-                  isolated: bool | None = None) -> list[Result]:
+                  isolated: bool | None = None, done: list[str] | None = None) -> list[Result]:
     """Run scenarios one after another.
 
     By default all scenarios share one browser page (one window with --headed, a single
     login check). isolated=True gives each scenario a fresh context instead. Closing the
     browser window or pressing Ctrl+C stops the whole run; remaining scenarios are reported
-    as NOT RUN.
+    as NOT RUN. `done` are scenarios finished in an earlier run (--resume): recorded as DONE
+    in this run's report so a later --resume skips them too. The report is rewritten after
+    every scenario, so it survives the process being killed.
     """
     if isolated is None:
         isolated = bool(config["browser"].get("isolated", False))
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_root = Path(config["output_dir"])
     artifacts_dir = out_root / "_runs" / run_id
+    n = 2
+    while artifacts_dir.exists():  # two runs in the same second
+        artifacts_dir = out_root / "_runs" / f"{run_id}_{n}"
+        n += 1
     results: list[Result] = []
+    earlier = [Result(scenario=n, ok=True, seconds=0, status="DONE") for n in (done or [])]
     state = _RunState()
+
+    def save_progress() -> None:
+        ran = {r.scenario for r in results}
+        pending = [Result(scenario=s.name, ok=False, seconds=0, status="NOT RUN")
+                   for s in scenarios if s.name not in ran]
+        _write_report_json(earlier + results + pending, artifacts_dir)
+
+    save_progress()
 
     pw = sync_playwright().start()
     browser = ctx = page = None
@@ -342,6 +357,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                         ctx.close()
                         state.closing = False
             results.append(res)
+            save_progress()
             previous_failed = not res.ok
             if state.stop_reason:
                 log(f"=== STOPPED {sc.name}: {state.stop_reason} -> stopping the run")
@@ -366,7 +382,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
             except Exception:
                 pass
 
-    _write_report(results, artifacts_dir, state.stop_reason)
+    _write_report(earlier + results, artifacts_dir, state.stop_reason)
     return results
 
 
@@ -390,14 +406,39 @@ def _ensure_session(page, config: dict) -> None:
                     f"(or set {config['auth']['username_env']}/{config['auth']['password_env']}).")
 
 
-def _write_report(results: list[Result], artifacts_dir: Path, stop_reason: str | None = None) -> None:
+def _write_report_json(results: list[Result], artifacts_dir: Path) -> None:
+    """Write report.json atomically (a killed process never leaves a half-written file)."""
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    (artifacts_dir / "report.json").write_text(
-        json.dumps([r.__dict__ for r in results], indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp = artifacts_dir / "report.json.tmp"
+    tmp.write_text(json.dumps([r.__dict__ for r in results], indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, artifacts_dir / "report.json")
+
+
+def completed_in_last_run(output_dir: str | Path, run: str | None = None) -> tuple[Path | None, set[str]]:
+    """Scenarios finished (PASS or DONE) in the latest run, or in `run` (a folder of downloads/_runs)."""
+    runs = Path(output_dir) / "_runs"
+    if run and run != "latest":
+        report = Path(run) / "report.json" if Path(run).is_dir() else runs / run / "report.json"
+    else:
+        reports = sorted(runs.glob("*/report.json"))
+        report = reports[-1] if reports else None
+    if report is None or not report.exists():
+        return None, set()
+    data = json.loads(report.read_text(encoding="utf-8"))
+    return report, {r["scenario"] for r in data if r.get("status") in ("PASS", "DONE")}
+
+
+def _write_report(results: list[Result], artifacts_dir: Path, stop_reason: str | None = None) -> None:
+    _write_report_json(results, artifacts_dir)
     passed = sum(r.ok for r in results)
+    earlier = [r for r in results if r.status == "DONE"]
     print()
+    if earlier:
+        print(f"DONE in an earlier run (skipped): {len(earlier)} scenario(s)")
     print(f"{'RESULT':8} {'TIME':>7}  SCENARIO / FILE")
     for r in results:
+        if r.status == "DONE":
+            continue
         status = r.status or ("PASS" if r.ok else "FAIL")
         print(f"{status:8} {r.seconds:>6}s  {r.scenario}")
         for d in r.downloads:
@@ -408,4 +449,7 @@ def _write_report(results: list[Result], artifacts_dir: Path, stop_reason: str |
                 print(f"{'':18}   {a}")
     if stop_reason:
         print(f"\nRun stopped: {stop_reason}.")
-    print(f"\n{passed}/{len(results)} passed. Report: {artifacts_dir / 'report.json'}")
+    left = sum(1 for r in results if not r.ok)
+    print(f"\n{passed}/{len(results)} done. Report: {artifacts_dir / 'report.json'}")
+    if left:
+        print(f"{left} scenario(s) not finished: run the same command again with --resume to continue.")

@@ -484,3 +484,48 @@ def test_export_refused_when_country_changed(tmp_path, config):
     assert not r.ok
     assert "shows country 'bi' but this scenario is for 'kh'" in r.error
     assert not r.downloads
+
+
+def test_resume_after_interruption(tmp_path, server, capsys, monkeypatch):
+    """Report written after every scenario; --resume skips what finished and runs the rest."""
+    import json
+    from weplan_export import actions
+    from weplan_export.cli import main
+
+    out = tmp_path / "out"
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"base_url": server, "output_dir": str(out), "auth": {"required": False}}))
+    sc = tmp_path / "s.yaml"
+    sc.write_text(yaml.safe_dump({"scenarios": [
+        {"name": "a", "steps": [{"goto": "/app/bi/coverage"}]},
+        {"name": "b", "steps": [{"goto": "/app/bi/coverage"}, {"check_report": None}, {"interrupt": None}]},
+        {"name": "c", "steps": [{"goto": "/app/bi/coverage"}]},
+    ]}))
+
+    seen_mid_run = {}
+
+    def check_report(ctx, args):
+        report = sorted((out / "_runs").glob("*/report.json"))[-1]
+        seen_mid_run.update({r["scenario"]: r["status"] for r in json.loads(report.read_text())})
+
+    def interrupt(ctx, args):
+        raise KeyboardInterrupt  # someone stops the run
+
+    monkeypatch.setitem(actions.STEPS, "check_report", check_report)
+    monkeypatch.setitem(actions.STEPS, "interrupt", interrupt)
+    assert main(["-c", str(cfg), "run", str(sc)]) != 0
+    # While b was running, the report already had a finished and b/c pending.
+    assert seen_mid_run == {"a": "PASS", "b": "NOT RUN", "c": "NOT RUN"}
+    assert "--resume" in capsys.readouterr().out
+
+    monkeypatch.setitem(actions.STEPS, "interrupt", lambda ctx, args: None)
+    assert main(["-c", str(cfg), "run", str(sc), "--resume"]) == 0
+    text = capsys.readouterr().out
+    assert "1 scenario(s) already done, 2 left" in text
+    assert "=== [1/2] b" in text and "=== [2/2] c" in text and "=== [1/3] a" not in text
+    report = sorted((out / "_runs").glob("*/report.json"))[-1]
+    assert {r["scenario"]: r["status"] for r in json.loads(report.read_text())} == \
+        {"a": "DONE", "b": "PASS", "c": "PASS"}
+
+    assert main(["-c", str(cfg), "run", str(sc), "--resume"]) == 0
+    assert "Nothing left to run." in capsys.readouterr().out
