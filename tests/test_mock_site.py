@@ -115,7 +115,7 @@ def test_full_flow_xlsx_with_matrix(tmp_path, config):
         assert f.exists()
         data = _xlsx_dict(f)
         assert data["country"] == "kh"
-        assert data["kpi"] == "/app/bi/latencyMobile"
+        assert data["kpi"] == "/app/kh/latencyMobile"  # the country is part of the URL
         assert data["date"] == "2026-08-24..2026-09-23"
         assert data["carrier"] == net
         assert data["coverage"] == "4G"
@@ -455,8 +455,8 @@ def test_scenarios_run_for_each_market(config):
 
 def test_empty_table_is_exported_with_warning(tmp_path, config, capsys):
     doc = {"scenarios": [{"name": "haiti_5g", "steps": [
+        {"goto": "/app/ht/coverage"},
         {"select_country": "ht"},
-        {"goto": "/app/bi/coverage"},
         {"set_date": {"preset": "Last month"}},
         {"select_filter": {"id": "coverage_filter", "options": ["5G_SA"]}},
         {"choose_view": "macro"},
@@ -467,3 +467,20 @@ def test_empty_table_is_exported_with_warning(tmp_path, config, capsys):
     assert r.ok, r.error
     assert "table is empty" in capsys.readouterr().out
     assert Path(r.downloads[0]["file"]).name == "empty.xlsx"
+
+
+def test_export_refused_when_country_changed(tmp_path, config):
+    """Guard: a page opened under another country's URL must not be exported under this market's name."""
+    doc = {"scenarios": [{"name": "wrong_country", "steps": [
+        {"goto": "/app/kh/coverage"},
+        {"select_country": "kh"},
+        {"goto": "/app/bi/coverage"},          # e.g. a hard-coded URL of another country
+        {"set_date": {"preset": "Last month"}},
+        {"choose_view": "macro"},
+        {"wait_for_table": {}},
+        {"download_table": {"format": "xlsx"}},
+    ]}]}
+    r = _run(tmp_path, config, doc)[0]
+    assert not r.ok
+    assert "shows country 'bi' but this scenario is for 'kh'" in r.error
+    assert not r.downloads

@@ -124,8 +124,9 @@ if (announce && localStorage.getItem('changelogSeen') !== 'delta') setTimeout(()
   };
 }, 1500);
 // The dashboard remembers the chosen country across pages.
-const country = params.get('country') || sessionStorage.getItem('country') || 'bi';
-sessionStorage.setItem('country', country);
+// Like the dashboard, the country is part of the URL: /app/<country>/<kpi> (e.g. /app/kh/coverage).
+const pathMatch = location.pathname.match(/^\/app\/([a-z]{2})\/(.*)$/);
+const country = pathMatch ? pathMatch[1] : 'bi';
 const carriers = {bi: ['ECONET', 'LUMITEL', 'ONAMOB', 'SMART'], kh: ['CELLCARD', 'METFONE', 'SMART'], ht: ['DIGICEL', 'NATCOM']};
 const $ = s => document.querySelector(s);
 document.getElementById('kpiTitle').textContent = location.pathname;
@@ -139,11 +140,11 @@ document.querySelectorAll('a.has-arrow').forEach(a => a.addEventListener('click'
   e.preventDefault(); a.nextElementSibling.classList.toggle('mm-show');
 }));
 // Like the dashboard: switching country calls an endpoint (its navigation is aborted:
-// net::ERR_ABORTED), then reloads the same page.
+// net::ERR_ABORTED), then loads the same page under the new country's URL.
 $('#dropdownCountryChooser').addEventListener('change', e => {
-  sessionStorage.setItem('country', e.target.value);
+  const target = pathMatch ? `/app/${e.target.value}/${pathMatch[2]}` : `/app/${e.target.value}/coverage`;
   location.href = '/switch-country?country=' + e.target.value;   // 204 -> ERR_ABORTED
-  setTimeout(() => location.reload(), 600);
+  setTimeout(() => location.assign(target), 600);
 });
 
 let dateRange = null;

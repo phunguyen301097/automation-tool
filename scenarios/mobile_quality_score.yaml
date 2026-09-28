@@ -17,7 +17,7 @@
 
 vars:
   kpi: Mobile Quality Score
-  page: /app/bi/compositeMobileQualityScore
+  page: compositeMobileQualityScore                  # trang: /app/<mã quốc gia>/compositeMobileQualityScore
 
 scenarios:
   - name: ${market.code}_${kpi}_${level.name}_${quality}
@@ -29,8 +29,8 @@ scenarios:
         - {name: Province, view: admin_1}  #   By provinces
       quality: [Excellent, Sufficient, Insufficient]   # lọc Mobile Quality Score
     steps:
-      - select_country: ${market.country}                     # chọn quốc gia của thị trường
-      - open_menu: ${page}
+      - open_menu: /app/${market.country}/${page}            # mã quốc gia nằm trong URL (vd /app/kh/...)
+      - select_country: ${market.country}                     # kiểm tra / chọn đúng quốc gia
       - set_date: {preset: Last month}                          # chọn Date: Last month
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - select_filter: {label: "Mobile Quality Score", options: ["${quality}"]}

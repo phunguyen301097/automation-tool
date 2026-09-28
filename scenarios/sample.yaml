@@ -14,7 +14,7 @@
 
 vars:
   kpi: Sample
-  page: /app/bi/sample
+  page: sample                  # trang: /app/<mã quốc gia>/sample
 
 scenarios:
   - name: ${market.code}_${kpi}_${level.name}_${tech.name}
@@ -27,8 +27,8 @@ scenarios:
       tech:
         - {name: All}
     steps:
-      - select_country: ${market.country}                     # chọn quốc gia của thị trường
-      - open_menu: ${page}
+      - open_menu: /app/${market.country}/${page}            # mã quốc gia nằm trong URL (vd /app/kh/...)
+      - select_country: ${market.country}                     # kiểm tra / chọn đúng quốc gia
       - set_date: {preset: Last month}                          # chọn Date: Last month
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - choose_view: ${level.view}                              # Macro data / By provinces

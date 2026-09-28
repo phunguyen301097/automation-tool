@@ -958,6 +958,8 @@ def download_table(ctx: Context, args: Any = None) -> None:
         fs = args["format_select"]
         _set_select_values(ctx, fs["selector"], [fs["option"]])
 
+    _check_country(ctx)
+
     btn = scope.locator("button, a, [role=button]").filter(has_text=_text_regex(button_text)).first
     if not btn.count():
         # Fall back to the whole page (button may be rendered in a toolbar outside the container).
@@ -1000,6 +1002,17 @@ def download_table(ctx: Context, args: Any = None) -> None:
         info["data_rows"] = _verify_file(target)
         ctx.log(f"  verified: {info['data_rows']} data rows")
     ctx.downloads.append(info)
+
+
+def _check_country(ctx: Context) -> None:
+    """Refuse to export if the dashboard no longer shows the country chosen by select_country."""
+    want = ctx.vars.get("country_code")
+    if not want:
+        return
+    shown = ctx.page.evaluate("(sel) => { const el = document.querySelector(sel); return el ? el.value : null; }",
+                              ctx.sel["country_select"])
+    if shown is not None and shown != want:
+        raise StepError(f"Dashboard shows country '{shown}' but this scenario is for '{want}': not exporting")
 
 
 def _click_format_option(ctx: Context, btn, option_re: re.Pattern) -> None:

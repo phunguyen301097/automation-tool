@@ -14,7 +14,7 @@
 
 vars:
   kpi: Coverage time
-  page: /app/bi/coverage
+  page: coverage                  # trang: /app/<mã quốc gia>/coverage
 
 scenarios:
   - name: ${market.code}_${kpi}_${level.name}_${tech.name}
@@ -32,8 +32,8 @@ scenarios:
         - name: 4G
           coverage: [4G]
     steps:
-      - select_country: ${market.country}                     # chọn quốc gia của thị trường
-      - open_menu: ${page}
+      - open_menu: /app/${market.country}/${page}            # mã quốc gia nằm trong URL (vd /app/kh/...)
+      - select_country: ${market.country}                     # kiểm tra / chọn đúng quốc gia
       - set_date: {preset: Last month}                          # chọn Date: Last month
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - select_filter: {id: coverage_filter, options: "${tech.coverage}"}   # Coverage type
