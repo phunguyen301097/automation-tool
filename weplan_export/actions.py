@@ -923,14 +923,16 @@ def wait_for_table(ctx: Context, args: Any = None) -> None:
 # --------------------------------------------------------------------------- download
 
 # Menu items of "Download table": As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG.
+# Exact labels first; the loose patterns (whole words only: "Excellent" is not "Excel")
+# are tried only when no exact item exists.
 _FORMAT_TEXT = {
-    "xlsx": r"^\s*As XLSX\s*$|excel|xlsx",
-    "xls": r"^\s*As XLS\s*$|excel",
-    "csv": r"^\s*As CSV\s*$",
-    "json": r"^\s*As JSON\s*$",
-    "pdf": r"^\s*As PDF\s*$",
-    "txt": r"^\s*As TXT\s*$",
-    "png": r"^\s*As PNG\s*$",
+    "xlsx": [r"^\s*As XLSX\s*$", r"\b(excel|xlsx)\b"],
+    "xls": [r"^\s*As XLS\s*$", r"\bexcel\b"],
+    "csv": [r"^\s*As CSV\s*$", r"\bcsv\b"],
+    "json": [r"^\s*As JSON\s*$", r"\bjson\b"],
+    "pdf": [r"^\s*As PDF\s*$"],
+    "txt": [r"^\s*As TXT\s*$"],
+    "png": [r"^\s*As PNG\s*$"],
 }
 
 
@@ -967,17 +969,18 @@ def download_table(ctx: Context, args: Any = None) -> None:
     btn.wait_for(state="visible", timeout=ctx.timeouts["default"])
     btn.scroll_into_view_if_needed()
 
-    option_re = None
+    option_res: list[re.Pattern] = []
     if args.get("format_text"):
-        option_re = _text_regex(args["format_text"])
+        option_res = [_text_regex(args["format_text"], exact=True)]
     elif fmt:
-        option_re = re.compile(_FORMAT_TEXT.get(fmt, re.escape(fmt)), re.I)
+        option_res = [re.compile(p, re.I) for p in _FORMAT_TEXT.get(fmt, [rf"^\s*As {re.escape(fmt)}\s*$"])]
+    option_re = option_res[0] if option_res else None
 
     ctx.log(f"  click '{button_text}'" + (f" -> {option_re.pattern}" if option_re else ""))
     with page.expect_download(timeout=ctx.timeouts["download"]) as dl_info:
         btn.click()
         if option_re is not None:
-            _click_format_option(ctx, btn, option_re)
+            _click_format_option(ctx, btn, option_res)
     download = dl_info.value
 
     suggested = download.suggested_filename or "table"
@@ -1015,25 +1018,33 @@ def _check_country(ctx: Context) -> None:
         raise StepError(f"Dashboard shows country '{shown}' but this scenario is for '{want}': not exporting")
 
 
-def _click_format_option(ctx: Context, btn, option_re: re.Pattern) -> None:
-    """After clicking the download button, pick the file-type item if a menu/modal appears."""
+_MENU_ITEMS = "a, button, li, [role=menuitem], [role=option], .dropdown-item, .p-menuitem-link"
+_OPEN_MENUS = (".dropdown-menu.show, .dropdown-menu:visible, [role=menu], .p-menu, .p-tieredmenu, "
+               ".p-contextmenu, .modal.show")
+
+
+def _click_format_option(ctx: Context, btn, option_res: list[re.Pattern]) -> None:
+    """After clicking the download button, pick the file-type item in the menu it opened."""
     page = ctx.page
-    candidates = page.locator(
-        ".dropdown-menu.show a, .dropdown-menu.show button, .dropdown-menu.show li, "
-        ".p-menu a, .p-menuitem-link, .p-tieredmenu a, .modal.show button, .modal.show a, "
-        "[role=menuitem], [role=option], button, a, label"
-    ).filter(has_text=option_re)
+    btn_text = btn.inner_text().strip().lower()
+    # The menu next to the button first (its dropdown), then any other open menu.
+    scopes = [btn.locator("xpath=ancestor::*[contains(@class,'btn-group') or contains(@class,'dropdown')][1]"),
+              page.locator(_OPEN_MENUS)]
     deadline = time.time() + 5
     while time.time() < deadline:
-        n = candidates.count()
-        for i in range(n):
-            c = candidates.nth(i)
-            try:
-                if c.is_visible() and c.inner_text().strip().lower() != btn.inner_text().strip().lower():
-                    c.click()
-                    return
-            except Exception:
-                continue
+        for pattern in option_res:
+            for scope in scopes:
+                items = scope.locator(_MENU_ITEMS).filter(has_text=pattern)
+                for i in range(items.count()):
+                    item = items.nth(i)
+                    try:
+                        text = item.inner_text().strip()
+                        if item.is_visible() and text.lower() != btn_text:
+                            item.click()
+                            ctx.log(f"  chose '{text}'")
+                            return
+                    except Exception:
+                        continue
         page.wait_for_timeout(250)
     ctx.log("  (no file-type menu appeared; assuming the button downloads directly)")
 
