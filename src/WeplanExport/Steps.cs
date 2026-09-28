@@ -14,7 +14,25 @@ public class StepContext(IPage page, AppConfig config, Scenario scenario, string
     public Scenario Scenario { get; } = scenario;
     public string OutputDir { get; } = outputDir;
     public Action<string> Log { get; } = log;
-    public Dictionary<string, object?> Vars { get; } = new(scenario.Vars);
+    /// <summary>
+    /// Report month defaults to the previous calendar month; set_date overrides it with the month
+    /// actually selected (e.g. Topology Stock has no date filter).
+    /// </summary>
+    public Dictionary<string, object?> Vars { get; } = DefaultVars(scenario.Vars);
+
+    private static Dictionary<string, object?> DefaultVars(Dictionary<string, object?> scenarioVars)
+    {
+        var today = DateTime.Today;
+        var last = new DateTime(today.Year, today.Month, 1).AddDays(-1);
+        var vars = new Dictionary<string, object?>
+        {
+            ["year"] = last.Year.ToString(),
+            ["month"] = last.Month.ToString(),
+            ["month2"] = last.Month.ToString("00"),
+        };
+        foreach (var (k, v) in scenarioVars) vars[k] = v;
+        return vars;
+    }
     public List<DownloadInfo> Downloads { get; } = new();
     public SelectorConfig Sel => Config.Selectors;
     public TimeoutConfig Timeouts => Config.Timeouts;
@@ -36,7 +54,7 @@ public static class Steps
         Register(GotoAsync, "Open a path or URL: /app/bi/coverage", "goto");
         Register(OpenMenuAsync, "Navigate the sidebar: \"Coverage time\" | [\"Latency\", \"Latency Mobile (Cellular)\"] | /app/bi/signal", "open_menu", "menu");
         Register(SelectCountryAsync, "Select country by name (Cambodia) or code (kh)", "select_country", "country");
-        Register(SelectFilterAsync, "{id: carrier_filter, options: [ECONET], clear: true, mode: js|ui} or {id: ..., all: true}", "select_filter", "select", "filter");
+        Register(SelectFilterAsync, "{id: carrier_filter | label: \"Technology\", options: [ECONET], clear: true, mode: js|ui, all: true}", "select_filter", "select", "filter");
         Register(FiltersAsync, "Several filters at once: {carrier_filter: [ECONET], coverage_filter: [\"4G\"]}", "filters");
         Register(SetDateAsync, "{from: 2026-08-01, to: 2026-08-31, mode: auto|input|calendar|preset|skip, preset: \"Last 30 days\"}", "set_date", "date");
         Register(ApplyAsync, "Click \"Parameters changed...\" if it is visible", "apply", "run_query");
@@ -386,10 +404,46 @@ public static class Steps
             "(sel) => Array.from(document.querySelector(sel).selectedOptions).map(o => o.text.trim())", css)).ToList();
     }
 
+    private const string SelectByLabelJs = @"(wanted) => {
+        const norm = s => s.replace(/\(.*?\)/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        const w = norm(wanted);
+        const labels = Array.from(document.querySelectorAll('label'))
+            .filter(l => !l.closest('.modal') && norm(l.textContent) === w);
+        for (const l of labels) {
+            let sel = l.htmlFor ? document.getElementById(l.htmlFor) : null;
+            if (!sel || sel.tagName !== 'SELECT') {
+                const box = l.closest('.form-group, .form-group-sm, .col, div');
+                sel = box ? box.querySelector('select') : null;
+            }
+            if (sel) {
+                if (!sel.id) sel.setAttribute('data-weplan-label', wanted);
+                return sel.id ? '#' + CSS.escape(sel.id) : `select[data-weplan-label=""${wanted}""]`;
+            }
+        }
+        return null;
+    }";
+
+    /// <summary>CSS selector of the select whose label reads <paramref name="label"/> (counters like "(1 active)" ignored).</summary>
+    private static async Task<string> SelectByLabelAsync(StepContext ctx, string label)
+    {
+        var sw = Stopwatch.StartNew();
+        string? css;
+        while ((css = await ctx.Page.EvaluateAsync<string?>(SelectByLabelJs, label)) is null)
+        {
+            if (sw.ElapsedMilliseconds > ctx.Timeouts.Default) throw new StepException($"No filter labelled '{label}' found on the page");
+            await ctx.Page.WaitForTimeoutAsync(500);
+        }
+        ctx.Log($"  filter '{label}' -> {css}");
+        return css;
+    }
+
     public static async Task SelectFilterAsync(StepContext ctx, object? args)
     {
         var a = Args.Map(args, "id");
-        var css = a.Get("selector") ?? "#" + (a.Get("id") ?? throw new StepException("select_filter needs id or selector"));
+        var css = a.Get("selector")
+                  ?? (a.Get("id") is { } id ? "#" + id
+                      : a.Get("label") is { } label ? await SelectByLabelAsync(ctx, label)
+                      : throw new StepException("select_filter needs id, label or selector"));
         var values = Args.StrList(a.GetValueOrDefault("options") ?? a.GetValueOrDefault("value"));
         var clear = a.GetBool("clear", true);
         await ctx.Page.WaitForSelectorAsync(css, new() { State = WaitForSelectorState.Attached, Timeout = ctx.Timeouts.Default });

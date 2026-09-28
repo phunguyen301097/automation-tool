@@ -515,35 +515,78 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         }
     }
 
-    [Theory]
-    [InlineData("network_availability.yaml", "Network availability", "/app/bi/networkAvailabilityMobile", true)]
-    [InlineData("sample.yaml", "Sample", "/app/bi/sample", false)]
-    [InlineData("speed_test_throughput.yaml", "Speed test Throughput", "/app/bi/speedTestThruMobile", true)]
-    [InlineData("web_performance_times.yaml", "Web performance times", "/app/bi/webPerformanceTimesMobile", true)]
-    [InlineData("video_streaming_times.yaml", "Video Streaming times", "/app/bi/youtubeTimesMobile", true)]
-    public async Task MonthlyPageScenarios(string fileName, string kpi, string path, bool split)
+    private static readonly Dictionary<string, string> Cov = new()
     {
+        ["All"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
+        ["5G"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED",
+        ["4G"] = "4G",
+    };
+
+    private static List<(string Name, Dictionary<string, string> State)> CoverageKpi(string kpi, Dictionary<string, string>? extra = null) =>
+        (from lvl in new[] { "Net", "Province" }
+         from t in new[] { "All", "5G", "4G" }
+         select ($"{kpi}_{lvl}_{t}", new Dictionary<string, string>(extra ?? new()) { ["coverage"] = Cov[t] })).ToList();
+
+    /// <summary>file -> (page path, expected file name parts and mock state), from Weplan_export.docx.</summary>
+    private static (string Path, List<(string Name, Dictionary<string, string> State)> Expected) KpiCase(string file) => file switch
+    {
+        "signal_strength.yaml" => ("/app/bi/signal", CoverageKpi("Signal strength")),
+        "data_traffic.yaml" => ("/app/bi/traffic", CoverageKpi("Data traffic")),
+        "latency.yaml" => ("/app/bi/latencyMobile", CoverageKpi("Latency")),
+        "packet_loss.yaml" => ("/app/bi/latencyPacketLossMobile", CoverageKpi("Packet Loss")),
+        "throughput.yaml" => ("/app/bi/globalThroughputNetwork", CoverageKpi("throughput")),
+        "network_availability.yaml" => ("/app/bi/networkAvailabilityMobile", CoverageKpi("Network availability")),
+        "speed_test.yaml" => ("/app/bi/speedTestThruMobile", CoverageKpi("Speed test")),
+        "web_performance.yaml" => ("/app/bi/webPerformanceTimesMobile",
+            CoverageKpi("Time to first byte", new() { ["dimension"] = "request_time" })),
+        "video_streaming.yaml" => ("/app/bi/youtubeTimesMobile",
+            CoverageKpi("Video Start time", new() { ["dimension"] = "start_time" })),
+        "sample.yaml" => ("/app/bi/sample", new() { ("Sample_Net_All", new()), ("Sample_Province_All", new()) }),
+        "mobile_quality_score.yaml" => ("/app/bi/compositeMobileQualityScore",
+            (from lvl in new[] { "Net", "Province" }
+             from q in new[] { "Excellent", "Sufficient", "Insufficient" }
+             select ($"{q}_{lvl}_All", new Dictionary<string, string> { ["mqs"] = q })).ToList()),
+        "topology_stock.yaml" => ("/app/bi/topologyStock",
+            (from lvl in new[] { "Net", "Province" }
+             from t in new[] { ("5G", "NR"), ("4G", "LTE"), ("3G", "UMTS"), ("2G", "GSM") }
+             select ($"Topology Stock_{lvl}_{t.Item1}", new Dictionary<string, string> { ["technology"] = t.Item2, ["date"] = "null" })).ToList()),
+        _ => throw new ArgumentException(file),
+    };
+
+    [Theory]
+    [InlineData("signal_strength.yaml")]
+    [InlineData("data_traffic.yaml")]
+    [InlineData("latency.yaml")]
+    [InlineData("packet_loss.yaml")]
+    [InlineData("throughput.yaml")]
+    [InlineData("mobile_quality_score.yaml")]
+    [InlineData("sample.yaml")]
+    [InlineData("network_availability.yaml")]
+    [InlineData("topology_stock.yaml")]
+    [InlineData("speed_test.yaml")]
+    [InlineData("web_performance.yaml")]
+    [InlineData("video_streaming.yaml")]
+    public async Task MonthlyKpiScenarios(string fileName)
+    {
+        var (path, expected) = KpiCase(fileName);
         var config = Config();
         var results = await Runner.RunAsync(ScenarioLoader.Load(new[] { RepoFile($"scenarios/{fileName}") }),
             config, new RunOptions());
-        var techs = split ? new[] { "All", "5G", "4G" } : new[] { "All" };
         Assert.True(results.All(r => r.Status == "PASS"), string.Join("; ", results.Select(r => $"{r.Scenario}: {r.Error}")));
-        Assert.Equal(2 * techs.Length, results.Count);
+        Assert.Equal(expected.Count, results.Count);
+        Assert.Equal(expected.Count, Directory.GetFiles(config.OutputDir, "*.xlsx").Length);
 
         var today = DateOnly.FromDateTime(DateTime.Today);
         var last = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
-        foreach (var (level, view) in new[] { ("Net", "byCountry"), ("Province", "byRegions") })
+        foreach (var (name, state) in expected)
         {
-            foreach (var tech in techs)
-            {
-                var file = Path.Combine(config.OutputDir, $"VTB_{last.Year}_T{last.Month}_{kpi}_{level}_{tech}.xlsx");
-                Assert.True(File.Exists(file), file);
-                var data = ReadXlsx(file);
-                Assert.Equal(path, data["kpi"]);
-                Assert.Equal(view, data["view"]);
-                Assert.Equal("ECONET|LUMITEL|ONAMOB|SMART", data["carrier"]);
-                if (tech == "4G") Assert.Equal("4G", data["coverage"]);
-            }
+            var file = Path.Combine(config.OutputDir, $"VTB_{last.Year}_T{last.Month}_{name}.xlsx");
+            Assert.True(File.Exists(file), file);
+            var data = ReadXlsx(file);
+            Assert.Equal(path, data["kpi"]);
+            Assert.Equal(name.Contains("_Net_") ? "byCountry" : "byRegions", data["view"]);
+            Assert.Equal("ECONET|LUMITEL|ONAMOB|SMART", data["carrier"]);
+            foreach (var (key, value) in state) Assert.Equal(value, data.GetValueOrDefault(key) ?? "");
         }
     }
 }

@@ -1,24 +1,26 @@
-# Network availability > Mobile (Cellular)  (6 file, theo Weplan_export.docx)
+# Video Streaming > Mobile (Cellular) > Times  (6 file, theo Weplan_export.docx)
 #
 #   Lần 1 - mức toàn mạng (Net): Macro data      Lần 2 - mức tỉnh (Province): By provinces
 #
-#     VTB_2026_T8_Network availability_Net_All     VTB_2026_T8_Network availability_Province_All
-#     VTB_2026_T8_Network availability_Net_5G      VTB_2026_T8_Network availability_Province_5G
-#     VTB_2026_T8_Network availability_Net_4G      VTB_2026_T8_Network availability_Province_4G
+#     VTB_2026_T8_Video Start time_Net_All         VTB_2026_T8_Video Start time_Province_All
+#     VTB_2026_T8_Video Start time_Net_5G          VTB_2026_T8_Video Start time_Province_5G
+#     VTB_2026_T8_Video Start time_Net_4G          VTB_2026_T8_Video Start time_Province_4G
 #
 # Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
 #
-# Chạy:  weplan-export run scenarios/network_availability.yaml
+# "Shown dimension" cố định là "Video start time (s)" theo tên file trong kịch bản.
+#
+# Chạy:  weplan-export run scenarios/video_streaming.yaml
 
 vars:
   market: VTB
   country: Burundi
-  kpi: Network availability
-  page: /app/bi/networkAvailabilityMobile
+  kpi: Video Start time
+  page: /app/bi/youtubeTimesMobile
 
 scenarios:
   - name: ${market}_${kpi}_${level.name}_${tech.name}
-    tags: [network_availability, monthly]
+    tags: [video_streaming, monthly]
     matrix:
       level:                               # Mức: toàn mạng / tỉnh
         - {name: Net, view: macro}         #   Macro data
@@ -36,6 +38,7 @@ scenarios:
       - set_date: {preset: Last month}                          # chọn Date: Last month
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - select_filter: {id: coverage_filter, options: "${tech.coverage}"}   # Coverage type
+      - select_filter: {id: dimension_filter, options: ["Video start time (s)"]}  # Shown dimension
       - choose_view: ${level.view}                              # Macro data / By provinces
       - wait_for_table: {}
       - download_table:                                         # Download table -> As XLSX

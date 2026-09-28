@@ -146,18 +146,29 @@ steps:
   - download_table: {format: xlsx, filename: "VTB_${year}_T${month}_Coverage time_Net_${tech.name}"}
 ```
 
-Các kịch bản hàng tháng có sẵn (mỗi file: mức toàn mạng + mức tỉnh × All/5G/4G, xuất As XLSX):
+Các kịch bản hàng tháng theo `Weplan_export.docx` (mỗi KPI: mức toàn mạng + mức tỉnh, xuất As XLSX,
+tên `VTB_<năm>_T<tháng>_<KPI>_<Net|Province>_<công nghệ>`):
 
-| File | Trang | Số file |
-|---|---|---|
-| `scenarios/coverage_time.yaml` | Coverage time | 6 |
-| `scenarios/network_availability.yaml` | Network availability – Mobile (Cellular) | 6 |
-| `scenarios/sample.yaml` | Sample (không có Coverage type → chỉ All) | 2 |
-| `scenarios/speed_test_throughput.yaml` | Speed test – Throughput Mobile (Cellular) | 6 |
-| `scenarios/web_performance_times.yaml` | Web performance – Mobile (Cellular) – Times | 6 |
-| `scenarios/video_streaming_times.yaml` | Video Streaming – Mobile (Cellular) – Times | 6 |
+| File | Trang | Tách theo | Số file |
+|---|---|---|---|
+| `coverage_time.yaml` | Coverage time | Coverage type All/5G/4G | 6 |
+| `signal_strength.yaml` | Signal & Quality → Average signal level | Coverage type All/5G/4G | 6 |
+| `data_traffic.yaml` | Data traffic | Coverage type All/5G/4G | 6 |
+| `latency.yaml` | Latency → Latency Mobile (Cellular) | Coverage type All/5G/4G | 6 |
+| `packet_loss.yaml` | Latency → Packet Loss Mobile (Cellular) | Coverage type All/5G/4G | 6 |
+| `throughput.yaml` | Throughput → Mobile (Cellular) | Coverage type All/5G/4G | 6 |
+| `mobile_quality_score.yaml` | Mobile Quality Score | Excellent / Sufficient / Insufficient | 6 |
+| `sample.yaml` | Sample | – (All) | 2 |
+| `network_availability.yaml` | Network availability → Mobile (Cellular) | Coverage type All/5G/4G | 6 |
+| `topology_stock.yaml` | Topology Stock (không chọn Date) | Technology NR/LTE/UMTS/GSM | 8 |
+| `speed_test.yaml` | Speed test → Mobile (Cellular) → Throughput | Coverage type All/5G/4G | 6 |
+| `web_performance.yaml` | Web performance → Mobile (Cellular) → Times (Time to first byte) | Coverage type All/5G/4G | 6 |
+| `video_streaming.yaml` | Video Streaming → Mobile (Cellular) → Times (Video start time) | Coverage type All/5G/4G | 6 |
 
-Chạy riêng một trang: `run scenarios/sample.yaml` hoặc theo tag, ví dụ `-t speed_test`; chạy tất cả: `-t monthly`.
+Chạy riêng một KPI: `run scenarios/latency.yaml` hoặc theo tag (`-t latency`); chạy tất cả: `run` hoặc `-t monthly`.
+
+Filter không có `id` cố định có thể chọn theo **nhãn hiển thị**: `select_filter: {label: "Technology", options: [NR]}`
+(bỏ qua phần đếm như "(1 active)"). Với trang không chọn Date, `${year}`/`${month}` mặc định là tháng trước.
 
 **Ngày** nhận các dạng `2026-08-01`, `01/08/2026`, `today`, `today-7d`, `max` (ngày mới nhất có dữ liệu,
 lấy từ `window.dateLimits` của trang), `max-30d`, `max-1m`, `min`.
