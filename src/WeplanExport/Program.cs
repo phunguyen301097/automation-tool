@@ -21,6 +21,10 @@ Commands:
       --resume [run]            skip scenarios finished in the latest run (or downloads/_runs/<run>), run the rest
       --order page|market       page: each page for all markets, then the next page (default);
                                 market: all pages of one market, then the next market
+      --pause <sec|min-max>     rest between exports, e.g. 30-60 (config: throttle.pause_between)
+      --market-pause <sec|min-max>
+                                rest after finishing a market, e.g. 300-600 (config: throttle.pause_after_market)
+      --max-exports <n>         stop after n files; continue later with --resume (config: throttle.max_exports)
       --dry-run                 only print the expanded scenarios
   list [files...]               list scenarios
   steps                         list available step types
@@ -49,6 +53,8 @@ int? slowMo = null;
 var view = "macro";
 string? order = null;
 string? resume = null;
+string? pause = null, marketPause = null;
+int? maxExports = null;
 for (var i = 1; i < rest.Count; i++)
 {
     switch (rest[i])
@@ -67,11 +73,17 @@ for (var i = 1; i < rest.Count; i++)
         case "--isolated": isolated = true; break;
         case "--view": view = rest[++i]; break;
         case "--order": order = rest[++i]; break;
+        case "--pause": pause = rest[++i]; break;
+        case "--market-pause": marketPause = rest[++i]; break;
+        case "--max-exports": maxExports = int.Parse(rest[++i]); break;
         default: files.Add(rest[i]); break;
     }
 }
 
 var config = AppConfig.Load(configPath);
+if (pause is not null) config.Throttle.PauseBetween = pause;
+if (marketPause is not null) config.Throttle.PauseAfterMarket = marketPause;
+if (maxExports is not null) config.Throttle.MaxExports = maxExports.Value;
 
 try
 {
@@ -99,6 +111,8 @@ try
             return 0;
 
         case "run":
+            ThrottleConfig.Range(config.Throttle.PauseBetween); // fail early on an invalid pause
+            ThrottleConfig.Range(config.Throttle.PauseAfterMarket);
             var scenarios = ScenarioLoader.Filter(LoadOrdered(), only, tags, exclude);
             if (scenarios.Count == 0)
             {
@@ -134,6 +148,10 @@ try
                 return 0;
             }
             Console.WriteLine($"Running {scenarios.Count} scenario(s):");
+            var t = config.Throttle;
+            if (ThrottleConfig.Range(t.PauseBetween).Max > 0 || ThrottleConfig.Range(t.PauseAfterMarket).Max > 0 || t.MaxExports > 0)
+                Console.WriteLine($"Throttle: pause {Show(t.PauseBetween)}s between exports, {Show(t.PauseAfterMarket)}s after each market, " +
+                                  $"max {(t.MaxExports > 0 ? t.MaxExports.ToString() : "unlimited")} file(s) this run");
             foreach (var s in scenarios) Console.WriteLine($"  - {s.Name}");
             Console.WriteLine();
             var results = await Runner.RunAsync(scenarios, config, new RunOptions
@@ -157,6 +175,8 @@ catch (StepException e)
     Console.Error.WriteLine(e.Message);
     return 1;
 }
+
+static string Show(object? pause) => ThrottleConfig.Range(pause) is var (lo, hi) && lo != hi ? $"{lo}-{hi}" : $"{hi}";
 
 List<Scenario> LoadOrdered()
 {

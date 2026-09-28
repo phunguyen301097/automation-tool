@@ -62,6 +62,14 @@ public sealed class MockServer : IDisposable
             c.Response.StatusCode = 204;
             return;
         }
+        if (c.Request.Url!.AbsolutePath == "/suspended")
+        {
+            body = Encoding.UTF8.GetBytes("<html><body><h2>Account suspended</h2><p>Your account has been temporarily " +
+                                          "suspended due to a violation of the platform's terms of use.</p></body></html>");
+            c.Response.ContentType = "text/html; charset=utf-8";
+            c.Response.OutputStream.Write(body);
+            return;
+        }
         if (c.Request.Url!.AbsolutePath == "/export")
         {
             var q = c.Request.QueryString;
@@ -445,14 +453,14 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
               - choose_view: macro
         """;
 
-    private async Task<(List<ScenarioResult> Results, string Log)> RunCapturedAsync(string yaml)
+    private async Task<(List<ScenarioResult> Results, string Log)> RunCapturedAsync(string yaml, AppConfig? config = null)
     {
         var original = Console.Out;
         var writer = new StringWriter();
         Console.SetOut(writer);
         try
         {
-            return (await RunYamlAsync(yaml, Config()), writer.ToString());
+            return (await RunYamlAsync(yaml, config ?? Config()), writer.ToString());
         }
         finally
         {
@@ -692,5 +700,170 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         var second = await Runner.RunAsync(left, config, new RunOptions { Done = finished.ToList() });
         Assert.Equal(new[] { "DONE", "PASS", "PASS" }, second.Select(r => r.Status));
         Assert.Equal(new HashSet<string> { "a", "b", "c" }, Runner.CompletedInLastRun(config.OutputDir).Finished);
+    }
+
+    private const string MarketScenarios = """
+        scenarios:
+          - name: "${market.code}_${kpi}"
+            matrix:
+              market: [{code: VTC}, {code: STL}]
+              kpi: [a, b]
+            steps: [{goto: /app/bi/coverage}]
+        """;
+
+    [Fact]
+    public async Task Pause_Between_Exports_And_After_Each_Market()
+    {
+        var config = Config();
+        config.Throttle.PauseBetween = "0.2";
+        config.Throttle.PauseAfterMarket = new List<object?> { "0.6", "0.7" };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var (results, log) = await RunCapturedAsync(MarketScenarios, config);
+        Assert.Equal(new[] { "PASS", "PASS", "PASS", "PASS" }, results.Select(r => r.Status));
+        Assert.Equal(2, Regex.Matches(log, "Rest between exports: pausing").Count);
+        Assert.Single(Regex.Matches(log, "Market VTC done, next STL: pausing"));
+        Assert.True(sw.Elapsed.TotalSeconds >= 0.2 * 2 + 0.6);
+    }
+
+    /// <summary>Kill this test's Chromium processes (below the Playwright driver) like a user closing it.</summary>
+    private static void KillBrowserLater(TimeSpan delay)
+    {
+        var parents = new Dictionary<int, int>();
+        foreach (var d in Directory.GetDirectories("/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(d), out var pid)) continue;
+            try
+            {
+                var stat = File.ReadAllText(Path.Combine(d, "stat"));
+                parents[pid] = int.Parse(stat[(stat.LastIndexOf(')') + 2)..].Split(' ')[1]);
+            }
+            catch (Exception)
+            {
+            }
+        }
+        var self = Environment.ProcessId;
+        bool Descends(int pid)
+        {
+            while (parents.TryGetValue(pid, out var parent) && pid > 1)
+            {
+                if (parent == self) return true;
+                pid = parent;
+            }
+            return false;
+        }
+        var victims = parents.Keys.Where(pid =>
+        {
+            try
+            {
+                return Descends(pid) && File.ReadAllText($"/proc/{pid}/comm") is var comm && (comm.Contains("chrom") || comm.Contains("headless"));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }).ToList();
+        Assert.NotEmpty(victims);
+        _ = Task.Delay(delay).ContinueWith(_ =>
+        {
+            foreach (var pid in victims)
+            {
+                try
+                {
+                    System.Diagnostics.Process.GetProcessById(pid).Kill();
+                }
+                catch (Exception)
+                {
+                }
+            }
+        });
+    }
+
+    [Fact]
+    public async Task Closing_The_Browser_During_A_Pause_Stops_The_Run()
+    {
+        var config = Config();
+        config.Throttle.PauseBetween = 30;
+        if (!File.Exists("/proc/self/stat")) return; // needs /proc (Linux CI)
+        Steps.Registry["close_soon"] = new((ctx, _) =>
+        {
+            KillBrowserLater(TimeSpan.FromSeconds(1));
+            return Task.CompletedTask;
+        }, "test only");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var results = await RunYamlAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}, {close_soon: null}]}
+              - {name: b, steps: [{goto: /app/bi/coverage}]}
+            """, config);
+        Assert.Equal(new[] { "PASS", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.True(sw.Elapsed.TotalSeconds < 20);
+    }
+
+    [Fact]
+    public async Task MaxExports_Stops_The_Run_For_Resume()
+    {
+        var config = Config();
+        config.Throttle.MaxExports = 2;
+        var (results, log) = await RunCapturedAsync("""
+            scenarios:
+              - name: "exp_${n}"
+                matrix: {n: [1, 2, 3]}
+                steps:
+                  - goto: /app/bi/coverage
+                  - set_date: {preset: Last month}
+                  - choose_view: macro
+                  - wait_for_table: {}
+                  - download_table: {format: csv, filename: "f_${n}"}
+            """, config);
+        Assert.Equal(new[] { "PASS", "PASS", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.Contains("reached throttle.max_exports (2 files)", log);
+        Assert.Contains("--resume", log);
+    }
+
+    [Fact]
+    public async Task Suspended_Account_Stops_The_Whole_Run()
+    {
+        var (results, log) = await RunCapturedAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}]}
+              - {name: b, steps: [{goto: /suspended}, {choose_view: macro}]}
+              - {name: c, steps: [{goto: /app/bi/coverage}]}
+            """);
+        Assert.Equal(new[] { "PASS", "STOPPED", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.Contains("temporarily suspended", results[1].Error);
+        Assert.Equal("2. choose_view", results[1].FailedStep);
+        Assert.NotEmpty(results[1].Artifacts);
+        Assert.Contains("Stopping the whole run", log);
+    }
+
+    [Fact]
+    public async Task Suspended_At_Start_Stops_Without_Retrying()
+    {
+        var config = Config();
+        config.Auth.Required = true;
+        config.StartPath = "/suspended";
+        var results = await RunYamlAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}]}
+              - {name: b, steps: [{goto: /app/bi/coverage}]}
+            """, config);
+        Assert.Equal(new[] { "STOPPED", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.Contains("temporarily suspended", results[0].Error);
+    }
+
+    [Fact]
+    public async Task Not_Logged_In_Stops_Instead_Of_Retrying()
+    {
+        var config = Config();
+        config.Auth.Required = true;
+        config.Auth.UsernameEnv = "WEPLAN_TEST_NO_SUCH_USER";
+        config.Selectors.LoggedInMarker = "#never-there";
+        var results = await RunYamlAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}]}
+              - {name: b, steps: [{goto: /app/bi/coverage}]}
+            """, config);
+        Assert.Equal(new[] { "STOPPED", "NOT RUN" }, results.Select(r => r.Status));
+        Assert.Contains("Not logged in", results[0].Error);
     }
 }

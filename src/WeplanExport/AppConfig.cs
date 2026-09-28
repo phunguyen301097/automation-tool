@@ -20,6 +20,7 @@ public class AppConfig
     public SelectorConfig Selectors { get; set; } = new();
     public DateConfig Date { get; set; } = new();
     public PopupConfig Popups { get; set; } = new();
+    public ThrottleConfig Throttle { get; set; } = new();
 
     /// <summary>Variables available to every scenario file (e.g. <c>markets</c>).</summary>
     public Dictionary<string, object?> Vars { get; set; } = new();
@@ -55,6 +56,12 @@ public class AuthConfig
     public string StorageState { get; set; } = ".auth/state.json";
     /// <summary>A URL containing one of these means the session expired.</summary>
     public List<string> LoginUrlMarkers { get; set; } = new() { "login", "signin", "auth" };
+    /// <summary>Text of a page saying the account is blocked: the run stops at once (no retry).</summary>
+    public List<string> BlockedTexts { get; set; } = new()
+    {
+        "temporarily suspended", "account has been suspended", "account is suspended",
+        "account has been blocked", "account is blocked", "account has been disabled",
+    };
     public string UsernameEnv { get; set; } = "WEPLAN_USERNAME";
     public string PasswordEnv { get; set; } = "WEPLAN_PASSWORD";
     public string LoginPath { get; set; } = "/";
@@ -156,4 +163,41 @@ public class PopupConfig
         "Close", "Got it", "OK", "Okay", "Dismiss", "Skip", "Later", "Not now", "Understood", "Continue",
         "Cerrar", "Entendido", "Aceptar",
     };
+}
+
+/// <summary>
+/// Rest between exports so the dashboard is not hit continuously. A pause is a number of seconds,
+/// [min, max] (random in between) or "min-max"; 0 = no pause.
+/// </summary>
+public class ThrottleConfig
+{
+    /// <summary>Between two scenarios.</summary>
+    public object? PauseBetween { get; set; }
+    /// <summary>Instead of PauseBetween when the next scenario is another market.</summary>
+    public object? PauseAfterMarket { get; set; }
+    /// <summary>Stop after this many files in one run (0 = no limit); --resume continues.</summary>
+    public int MaxExports { get; set; }
+
+    /// <summary>30 -> (30, 30); [30, 60] or "30-60" -> (30, 60).</summary>
+    public static (double Min, double Max) Range(object? value)
+    {
+        var parts = value switch
+        {
+            null => new List<string>(),
+            string s => System.Text.RegularExpressions.Regex.Split(s.Trim(), @"\s*[-,]\s*").Where(x => x.Length > 0).ToList(),
+            System.Collections.IEnumerable e => e.Cast<object?>().Select(x => Convert.ToString(x, System.Globalization.CultureInfo.InvariantCulture) ?? "").ToList(),
+            _ => new List<string> { Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "" },
+        };
+        if (parts.Count == 0) return (0, 0);
+        var nums = new List<double>();
+        foreach (var p in parts)
+        {
+            if (!double.TryParse(p, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d))
+                throw new StepException($"Invalid pause '{value}': use seconds, [min, max] or \"min-max\"");
+            nums.Add(d);
+        }
+        var (lo, hi) = (nums[0], nums[^1]);
+        if (lo < 0 || hi < lo) throw new StepException($"Invalid pause '{value}': use seconds, [min, max] or \"min-max\"");
+        return (lo, hi);
+    }
 }

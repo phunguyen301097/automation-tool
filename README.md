@@ -60,6 +60,7 @@ weplan-export run --headed --slow-mo 300    # xem trình duyệt chạy, chậm 
 weplan-export run --trace                   # ghi Playwright trace để debug
 weplan-export run --dry-run                 # chỉ in các bước sau khi thay biến
 weplan-export run --resume                  # chạy tiếp phần còn lại của lần chạy bị dừng
+weplan-export run --pause 30-60 --market-pause 300-600 --max-exports 100   # nghỉ giữa các lần xuất
 weplan-export steps                         # danh sách các loại bước
 ```
 
@@ -77,6 +78,22 @@ weplan-export steps                         # danh sách các loại bước
 bản đang dở và phần còn lại. Resume nhiều lần liên tiếp cũng được (phần đã xong ở các lần trước được ghi là
 `DONE`). Muốn tiếp tục từ một lần chạy cụ thể: `--resume 20260928_141453` (tên thư mục trong `downloads/_runs`).
 Thêm `--dry-run` để xem trước những kịch bản sẽ chạy.
+
+**Nghỉ giữa các lần xuất** (mục `throttle` trong `config.yaml`): tránh gọi dashboard liên tục.
+- `pause_between`: nghỉ giữa 2 kịch bản. Ghi số giây (`45`), khoảng ngẫu nhiên `[30, 60]` hoặc `"30-60"`.
+- `pause_after_market`: nghỉ dài hơn khi **xong 1 thị trường** (kịch bản kế tiếp là thị trường khác), ví dụ
+  `[300, 600]` = 5–10 phút. Nên dùng cùng `run_order: market` (hoặc `--order market`): xong hết các trang của
+  1 nước rồi nghỉ. Với `run_order: page`, thị trường đổi sau mỗi ~6 file nên sẽ nghỉ rất nhiều lần.
+- `max_exports`: xuất đủ N file thì dừng (0 = không giới hạn). Hôm sau chạy **đúng lệnh cũ** thêm `--resume`
+  để làm tiếp. Có thể chia theo thị trường: `-k "VTC_*"` hôm nay, `-k "STL_*"` hôm sau...
+- Ghi đè khi chạy: `--pause 30-60`, `--market-pause 300-600`, `--max-exports 100` (`--pause 0` để tắt).
+- Đang nghỉ vẫn đóng trình duyệt / Ctrl+C được, log ghi `pausing 45s (until 14:03:12)`.
+
+**Tài khoản bị khoá / bị đăng xuất**: trước mỗi bước (và khi một bước lỗi) tool kiểm tra trang có thông báo
+kiểu *"Your account has been temporarily suspended..."* (danh sách ở `auth.blocked_texts`) hoặc bị chuyển về
+trang đăng nhập. Nếu có, tool **dừng cả lượt chạy ngay** (STOPPED / NOT RUN, chụp màn hình thông báo), không
+thử lại, không tự đăng nhập lại. Chỉ chạy tiếp (`--resume`) khi đã mở lại được dashboard bình thường trên trình
+duyệt và được Weplan xác nhận tài khoản dùng lại được.
 
 **Popup thông báo** (ví dụ "What's New: *New Delta Analysis in Map View*") được **tự đóng**: trước mỗi bước và
 bất cứ khi nào popup che thao tác click, tool bấm nút đóng (`×` / Close / OK / Got it...), không được thì bấm Esc,

@@ -30,10 +30,15 @@ public class RunOptions
     public List<string> Done { get; init; } = new();
 }
 
+/// <summary>The dashboard shows a suspension notice or the login page: stop the whole run.</summary>
+public class AccountBlockedException(string message) : Exception(message);
+
 /// <summary>Tracks whether the user closed the browser / pressed Ctrl+C, to stop the whole run.</summary>
 public class RunState
 {
     public string? StopReason { get; private set; }
+    /// <summary>Stopped on purpose (export limit): keep the session.</summary>
+    public bool Graceful { get; set; }
     /// <summary>True while the tool itself closes pages/contexts.</summary>
     public bool Closing { get; set; }
     public IPage? CurrentPage { get; set; }
@@ -250,6 +255,48 @@ public static class Runner
         return outDir;
     }
 
+    /// <summary>Why the dashboard can no longer be used (account suspended / logged out), or null.</summary>
+    public static async Task<string?> BlockedReasonAsync(IPage? page, AppConfig config, bool checkLogin = true)
+    {
+        try
+        {
+            if (page is null || page.IsClosed) return null;
+            var texts = config.Auth.BlockedTexts.Select(t => t.ToLowerInvariant()).ToList();
+            if (texts.Count > 0)
+            {
+                var hit = await page.EvaluateAsync<string?>(
+                    "(texts) => { const t = (document.body && document.body.innerText || '').toLowerCase();" +
+                    " return texts.find(x => t.includes(x)) || null; }", texts);
+                if (hit is not null) return $"the dashboard says the account is blocked ('{hit}')";
+            }
+            var url = page.Url.ToLowerInvariant();
+            if (checkLogin && config.Auth.Required && config.Auth.LoginUrlMarkers.Any(url.Contains))
+                return $"the dashboard went to the login page ({page.Url})";
+        }
+        catch (PlaywrightException)
+        {
+        }
+        return null;
+    }
+
+    private static string? MarketCode(Scenario sc) => sc.Vars.GetValueOrDefault("market") switch
+    {
+        IDictionary<string, object?> m => m.TryGetValue("code", out var c) ? c?.ToString() : null,
+        null => null,
+        var v => v.ToString(),
+    };
+
+    /// <summary>Sleep in small chunks so closing the browser or Ctrl+C still stops the run at once.</summary>
+    private static async Task PauseAsync(double seconds, string why, RunState state)
+    {
+        if (seconds <= 0) return;
+        var until = DateTime.Now.AddSeconds(seconds);
+        var total = (int)Math.Round(seconds);
+        Log($"{why}: pausing {(total >= 60 ? $"{total / 60}m " : "")}{total % 60}s (until {until:HH:mm:ss})");
+        while (state.StopReason is null && DateTime.Now < until)
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(500, Math.Max(1, (until - DateTime.Now).TotalMilliseconds))));
+    }
+
     private static readonly HashSet<string> FirstNavSteps = new() { "goto", "open_menu", "menu", "select_country", "country" };
 
     /// <summary>
@@ -310,15 +357,35 @@ public static class Runner
             }
             var sessionChecked = false;
             var previousFailed = false;
+            Scenario? previous = null;
+            var between = ThrottleConfig.Range(config.Throttle.PauseBetween);
+            var afterMarket = ThrottleConfig.Range(config.Throttle.PauseAfterMarket);
+            var exported = 0;
 
             for (var idx = 0; idx < scenarios.Count; idx++)
             {
                 var sc = scenarios[idx];
+                if (state.StopReason is null && config.Throttle.MaxExports > 0 && exported >= config.Throttle.MaxExports)
+                {
+                    state.Stop($"reached throttle.max_exports ({config.Throttle.MaxExports} files); continue later with --resume");
+                    state.Graceful = true;
+                }
+                if (state.StopReason is null && previous is not null)
+                {
+                    var (prevM, curM) = (MarketCode(previous), MarketCode(sc));
+                    if (prevM is not null && curM is not null && prevM != curM && afterMarket.Max > 0)
+                        await PauseAsync(Random.Shared.NextDouble() * (afterMarket.Max - afterMarket.Min) + afterMarket.Min,
+                            $"Market {prevM} done, next {curM}", state);
+                    else if (between.Max > 0)
+                        await PauseAsync(Random.Shared.NextDouble() * (between.Max - between.Min) + between.Min,
+                            "Rest between exports", state);
+                }
                 if (state.StopReason is not null)
                 {
                     results.Add(new ScenarioResult { Scenario = sc.Name, Status = "NOT RUN" });
                     continue;
                 }
+                previous = sc;
                 Log($"=== [{idx + 1}/{scenarios.Count}] {sc.Name}");
                 if (isolated)
                 {
@@ -360,6 +427,7 @@ public static class Runner
                         if (!Steps.Registry.TryGetValue(step.Name, out var def))
                             throw new StepException($"Unknown step '{step.Name}'. Available: {string.Join(", ", Steps.Registry.Keys.Order())}");
                         Log($"- {current}");
+                        if (await BlockedReasonAsync(page, config) is { } blocked) throw new AccountBlockedException(blocked);
                         if (config.Popups.AutoDismiss && step.Name is not ("dismiss_popups" or "close_popups"))
                             await Steps.DismissPopupsAsync(page!, config, Log);
                         await def.Run(sctx, step.Args);
@@ -370,6 +438,18 @@ public static class Runner
                 catch (Exception e)
                 {
                     res.FailedStep = current;
+                    if (state.StopReason is null)
+                    {
+                        // A step that timed out because the account got blocked meanwhile.
+                        var reason = e is AccountBlockedException ? e.Message : await BlockedReasonAsync(page, config);
+                        if (reason is not null)
+                        {
+                            state.Stop(reason);
+                            Log($"!! {reason}. Stopping the whole run: do not retry until the account works " +
+                                "again in a normal browser, then continue with --resume.");
+                            await SaveEvidenceAsync(page, artifactsDir, sc.Name, res);
+                        }
+                    }
                     if (state.StopReason is not null)
                     {
                         res.Status = "STOPPED";
@@ -381,19 +461,7 @@ public static class Runner
                         res.Error = $"{e.GetType().Name}: {e.Message}";
                         Log($"FAILED at step {current}: {res.Error}");
                         if (e is not StepException) Console.Error.WriteLine(e);
-                        Directory.CreateDirectory(artifactsDir);
-                        var baseName = Path.Combine(artifactsDir, Safe(sc.Name));
-                        try
-                        {
-                            await page!.ScreenshotAsync(new() { Path = baseName + ".png", FullPage = true });
-                            await File.WriteAllTextAsync(baseName + ".html", await page.ContentAsync());
-                            res.Artifacts.Add(baseName + ".png");
-                            res.Artifacts.Add(baseName + ".html");
-                        }
-                        catch (Exception)
-                        {
-                            // page may be closed/crashed; nothing more to capture
-                        }
+                        await SaveEvidenceAsync(page, artifactsDir, sc.Name, res);
                     }
                 }
                 finally
@@ -425,6 +493,7 @@ public static class Runner
                     }
                 }
                 results.Add(res);
+                exported += res.Downloads.Count;
                 SaveProgress();
                 previousFailed = !res.Ok;
                 Log(state.StopReason is not null
@@ -433,7 +502,7 @@ public static class Runner
                 if (opts.StopOnFail && !res.Ok) state.Stop("--stop-on-fail");
             }
             // Keep the refreshed session (cookies, "announcement seen" flags) for the next run.
-            if (!isolated && page is not null && state.StopReason is null) await SaveSessionAsync(page, config);
+            if (!isolated && page is not null && (state.StopReason is null || state.Graceful)) await SaveSessionAsync(page, config);
         }
         finally
         {
@@ -457,6 +526,23 @@ public static class Runner
         return all;
     }
 
+    private static async Task SaveEvidenceAsync(IPage? page, string artifactsDir, string name, ScenarioResult res)
+    {
+        Directory.CreateDirectory(artifactsDir);
+        var baseName = Path.Combine(artifactsDir, Safe(name));
+        try
+        {
+            await page!.ScreenshotAsync(new() { Path = baseName + ".png", FullPage = true });
+            await File.WriteAllTextAsync(baseName + ".html", await page.ContentAsync());
+            res.Artifacts.Add(baseName + ".png");
+            res.Artifacts.Add(baseName + ".html");
+        }
+        catch (Exception)
+        {
+            // page may be closed/crashed; nothing more to capture
+        }
+    }
+
     private static async Task SaveSessionAsync(IPage page, AppConfig config)
     {
         if (!config.Auth.Required) return;
@@ -473,9 +559,15 @@ public static class Runner
     private static async Task EnsureSessionAsync(IPage page, AppConfig config)
     {
         await page.GotoAsync(config.BaseUrl.TrimEnd('/') + config.StartPath, new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+        if (await BlockedReasonAsync(page, config, checkLogin: false) is { } blocked) throw new AccountBlockedException(blocked);
         if (await IsLoggedInAsync(page, config)) return;
-        if (await AutoLoginAsync(page, config)) return;
-        throw new StepException("Not logged in. Run `weplan-export login` first " +
+        if (await AutoLoginAsync(page, config))
+        {
+            if (await BlockedReasonAsync(page, config, checkLogin: false) is { } after) throw new AccountBlockedException(after);
+            return;
+        }
+        // Not logged in: stop instead of trying again for every scenario.
+        throw new AccountBlockedException("Not logged in. Run `weplan-export login` first " +
                                 $"(or set {config.Auth.UsernameEnv}/{config.Auth.PasswordEnv}).");
     }
 

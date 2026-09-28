@@ -204,4 +204,24 @@ public class ConfigTests
             "VTC_sample_Net", "VTC_sample_Province", "VTB_sample_Net", "VTB_sample_Province",
         }, names);
     }
+
+    [Fact]
+    public void Throttle_Pause_Formats()
+    {
+        Assert.Equal((30d, 30d), ThrottleConfig.Range("30"));
+        Assert.Equal((30d, 60d), ThrottleConfig.Range("30-60"));
+        Assert.Equal((30d, 60d), ThrottleConfig.Range(new List<object?> { "30", "60" }));
+        Assert.Equal((0d, 0d), ThrottleConfig.Range(null));
+        Assert.Equal((45d, 45d), ThrottleConfig.Range(45));
+        Assert.Throws<StepException>(() => ThrottleConfig.Range("abc"));
+        Assert.Throws<StepException>(() => ThrottleConfig.Range("60-30"));
+
+        var path = Path.GetTempFileName();
+        File.WriteAllText(path, "throttle:\n  pause_between: [30, 60]\n  pause_after_market: 300-600\n  max_exports: 100\n");
+        var cfg = AppConfig.Load(path);
+        File.Delete(path);
+        Assert.Equal((30d, 60d), ThrottleConfig.Range(cfg.Throttle.PauseBetween));
+        Assert.Equal((300d, 600d), ThrottleConfig.Range(cfg.Throttle.PauseAfterMarket));
+        Assert.Equal(100, cfg.Throttle.MaxExports);
+    }
 }
