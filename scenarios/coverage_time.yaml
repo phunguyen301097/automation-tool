@@ -1,0 +1,46 @@
+# Coverage time: xuất bảng Excel hàng tháng.
+#
+#   Lần 1 - mức toàn mạng (Net):   Macro data
+#   Lần 2 - mức tỉnh (Province):   By provinces
+#   Mỗi mức 3 công nghệ: All, 5G, 4G  ->  6 file:
+#
+#     VTB_2026_T8_Coverage time_Net_All        VTB_2026_T8_Coverage time_Province_All
+#     VTB_2026_T8_Coverage time_Net_5G         VTB_2026_T8_Coverage time_Province_5G
+#     VTB_2026_T8_Coverage time_Net_4G         VTB_2026_T8_Coverage time_Province_4G
+#
+# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
+# Năm / tháng lấy từ khoảng "Last month" dashboard hiển thị sau khi chọn.
+#
+# Chạy:  weplan-export run scenarios/coverage_time.yaml
+#        weplan-export run -k "*_Net_*"        (chỉ mức toàn mạng)
+
+vars:
+  market: VTB              # mã thị trường
+  country: Burundi         # quốc gia chọn ở góc phải trên dashboard
+  kpi: Coverage time       # tên menu + phần "Loại KPI" trong tên file
+
+scenarios:
+  - name: ${market}_${kpi}_${level.name}_${tech.name}
+    tags: [coverage_time, monthly]
+    matrix:
+      level:                               # Bước 4
+        - {name: Net, view: macro}         #   Macro data
+        - {name: Province, view: admin_1}  #   By provinces
+      tech:                                # Bước 3: Coverage type
+        - name: All
+          coverage: [5G_SA, 5G_NSA_CONNECTED, 5G_NSA_NOT_RESTRICTED, 5G_NSA_RESTRICTED, 4G, 3G, 2G]
+        - name: 5G
+          coverage: [5G_SA, 5G_NSA_CONNECTED, 5G_NSA_NOT_RESTRICTED, 5G_NSA_RESTRICTED]
+        - name: 4G
+          coverage: [4G]
+    steps:
+      - open_menu: ["${kpi}"]
+      - select_country: ${country}
+      - set_date: {preset: Last month}                          # Bước 1
+      - select_filter: {id: carrier_filter, all: true}          # Bước 2: Cellular network -> Select all
+      - select_filter: {id: coverage_filter, options: "${tech.coverage}"}   # Bước 3
+      - choose_view: ${level.view}                              # Bước 4
+      - wait_for_table: {}
+      - download_table:                                         # Bước 5, 6, 7
+          format: xlsx                                          #   As XLSX
+          filename: "${market}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"

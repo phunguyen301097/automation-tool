@@ -36,7 +36,7 @@ public static class Steps
         Register(GotoAsync, "Open a path or URL: /app/bi/coverage", "goto");
         Register(OpenMenuAsync, "Navigate the sidebar: \"Coverage time\" | [\"Latency\", \"Latency Mobile (Cellular)\"] | /app/bi/signal", "open_menu", "menu");
         Register(SelectCountryAsync, "Select country by name (Cambodia) or code (kh)", "select_country", "country");
-        Register(SelectFilterAsync, "{id: carrier_filter, options: [ECONET], clear: true, mode: js|ui}", "select_filter", "select", "filter");
+        Register(SelectFilterAsync, "{id: carrier_filter, options: [ECONET], clear: true, mode: js|ui} or {id: ..., all: true}", "select_filter", "select", "filter");
         Register(FiltersAsync, "Several filters at once: {carrier_filter: [ECONET], coverage_filter: [\"4G\"]}", "filters");
         Register(SetDateAsync, "{from: 2026-08-01, to: 2026-08-31, mode: auto|input|calendar|preset|skip, preset: \"Last 30 days\"}", "set_date", "date");
         Register(ApplyAsync, "Click \"Parameters changed...\" if it is visible", "apply", "run_query");
@@ -106,6 +106,9 @@ public static class Steps
     }
 
     private static string Safe(string s) => Regex.Replace(s, @"[^\w.\-]+", "_").Trim('_');
+
+    /// <summary>Keep spaces and letters; drop only characters Windows does not allow in file names.</summary>
+    public static string SafeFileName(string s) => Regex.Replace(s, @"[<>:""/\\|?*\x00-\x1f]+", "_").Trim().TrimEnd('.');
 
     // ------------------------------------------------------------------ popups
 
@@ -390,6 +393,11 @@ public static class Steps
         var values = Args.StrList(a.GetValueOrDefault("options") ?? a.GetValueOrDefault("value"));
         var clear = a.GetBool("clear", true);
         await ctx.Page.WaitForSelectorAsync(css, new() { State = WaitForSelectorState.Attached, Timeout = ctx.Timeouts.Default });
+        if (a.GetBool("all", false))
+        {
+            await SelectAllAsync(ctx, css, a.Get("mode") ?? "js");
+            return;
+        }
         if (values.Count == 0)
         {
             ctx.Log($"  clear {css}");
@@ -403,6 +411,45 @@ public static class Steps
             ? await SelectUiAsync(ctx, css, values, clear)
             : await SetSelectValuesAsync(ctx, css, values, clear, a.ContainsKey("wait_options_ms") ? a.GetInt("wait_options_ms", 0) : null);
         ctx.Log($"  {css} = [{string.Join(", ", selected)}]");
+    }
+
+    private const string SelectAllJs = @"(sel) => {
+        const el = document.querySelector(sel);
+        const opts = Array.from(el.options).filter(o => !o.disabled && o.value !== '');
+        if (!opts.length) return null;
+        opts.forEach(o => o.selected = true);
+        const $ = window.jQuery;
+        if ($ && $.fn && $.fn.selectpicker) { try { $(el).selectpicker('refresh'); } catch (e) {} }
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+        if ($) { try { $(el).trigger('changed.bs.select'); } catch (e) {} }
+        return opts.map(o => o.text.trim());
+    }";
+
+    /// <summary>Select every option ("Select All"). Waits for options that load asynchronously.</summary>
+    private static async Task SelectAllAsync(StepContext ctx, string css, string mode)
+    {
+        var page = ctx.Page;
+        string[]? selected;
+        if (mode == "ui")
+        {
+            var wrapper = page.Locator($".bootstrap-select:has({css})").First;
+            await wrapper.Locator(".dropdown-toggle").First.ClickAsync();
+            await wrapper.Locator(".bs-select-all").First.ClickAsync();
+            await page.Keyboard.PressAsync("Escape");
+            selected = await page.EvaluateAsync<string[]>(
+                "(sel) => Array.from(document.querySelector(sel).selectedOptions).map(o => o.text.trim())", css);
+        }
+        else
+        {
+            var sw = Stopwatch.StartNew();
+            while ((selected = await page.EvaluateAsync<string[]?>(SelectAllJs, css)) is null)
+            {
+                if (sw.ElapsedMilliseconds > ctx.Timeouts.Default) throw new StepException($"'{css}' has no options to select");
+                await page.WaitForTimeoutAsync(500);
+            }
+        }
+        ctx.Log($"  {css} = all {selected.Length}: [{string.Join(", ", selected)}]");
     }
 
     public static async Task FiltersAsync(StepContext ctx, object? args)
@@ -430,8 +477,14 @@ public static class Steps
         if (mode == "preset")
         {
             ctx.Log($"  date preset -> {a.Get("preset")}");
+            var before = await DateWidgetTextAsync(ctx);
             await OpenDatepickerAsync(ctx);
-            await page.GetByText(TextRegex(a.Get("preset")!, exact: true)).First.ClickAsync();
+            var items = await VisibleAsync(page.GetByText(TextRegex(a.Get("preset")!, exact: true)));
+            if (items.Count == 0) throw new StepException($"Preset '{a.Get("preset")}' not found in the date picker");
+            await items[0].ClickAsync();
+            await ClickApplyIfVisibleAsync(ctx);
+            await page.Keyboard.PressAsync("Escape");
+            await ReadPresetRangeAsync(ctx, a.Get("input_format") ?? dcfg.InputFormat, before);
             return;
         }
 
@@ -441,8 +494,7 @@ public static class Steps
         if (from > to) throw new StepException($"Date from {from:yyyy-MM-dd} is after to {to:yyyy-MM-dd}");
         if (limits.Min is { } min && from < min) ctx.Log($"  WARNING: {from:yyyy-MM-dd} < dashboard minDate {min:yyyy-MM-dd}");
         if (limits.Max is { } max && to > max) ctx.Log($"  WARNING: {to:yyyy-MM-dd} > dashboard maxDate {max:yyyy-MM-dd}");
-        ctx.Vars["date_from"] = from.ToString("yyyy-MM-dd");
-        ctx.Vars["date_to"] = to.ToString("yyyy-MM-dd");
+        SetDateVars(ctx, from, to);
 
         var fmt = a.Get("input_format") ?? dcfg.InputFormat;
         var sep = a.Get("range_separator") ?? dcfg.RangeSeparator;
@@ -481,6 +533,40 @@ public static class Steps
         await ClickApplyIfVisibleAsync(ctx);
         await page.Keyboard.PressAsync("Escape");
         await VerifyDateShownAsync(ctx, expected);
+    }
+
+    /// <summary>Variables for file names: ${date_from} ${date_to} ${year} ${month} (8) ${month2} (08).</summary>
+    private static void SetDateVars(StepContext ctx, DateOnly from, DateOnly to)
+    {
+        ctx.Vars["date_from"] = from.ToString("yyyy-MM-dd");
+        ctx.Vars["date_to"] = to.ToString("yyyy-MM-dd");
+        ctx.Vars["year"] = from.Year.ToString();
+        ctx.Vars["month"] = from.Month.ToString();
+        ctx.Vars["month2"] = from.Month.ToString("00");
+    }
+
+    /// <summary>After clicking a preset, read the range the widget shows and set the date variables.</summary>
+    private static async Task ReadPresetRangeAsync(StepContext ctx, string fmt, string before)
+    {
+        var shown = "";
+        for (var i = 0; i < 16; i++)
+        {
+            shown = await DateWidgetTextAsync(ctx);
+            if (shown != before || i >= 4)
+            {
+                var dates = Regex.Matches(shown, @"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
+                    .Select(m => DateOnly.TryParseExact(m.Value, fmt, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d : (DateOnly?)null)
+                    .Where(d => d is not null).Select(d => d!.Value).ToList();
+                if (dates.Count >= 2)
+                {
+                    SetDateVars(ctx, dates[0], dates[1]);
+                    ctx.Log($"  date widget shows: '{shown}' -> {dates[0]:yyyy-MM-dd} .. {dates[1]:yyyy-MM-dd}");
+                    return;
+                }
+            }
+            await ctx.Page.WaitForTimeoutAsync(250);
+        }
+        throw new StepException($"Could not read the date range after the preset (widget shows '{shown}'). Check date.input_format");
     }
 
     private static readonly string CalendarJs = LoadResource("calendar.js");
@@ -863,8 +949,7 @@ public static class Steps
         ctx.Vars.TryAdd("date_to", "");
         ctx.Vars["timestamp"] = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var name = a.Get("filename") is { } template
-            ? string.Join("/", ScenarioLoader.RenderString(template,
-                ctx.Vars.ToDictionary(kv => kv.Key, kv => (object?)Safe(Args.Str(kv.Value)))).Split('/').Select(Safe))
+            ? string.Join("/", ScenarioLoader.RenderString(template, ctx.Vars, SafeFileName).Split('/').Select(SafeFileName))
             : $"{Safe(ctx.Scenario.Name)}_{ctx.Vars["timestamp"]}";
         if (!name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) name += ext;
 

@@ -469,4 +469,49 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Assert.Equal(new[] { "PASS", "PASS" }, results.Select(r => r.Status));
         Assert.Contains("(removed)", log);
     }
+
+    private static string RepoFile(string relative)
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            var path = Path.Combine(dir.FullName, relative);
+            if (File.Exists(path)) return path;
+        }
+        throw new FileNotFoundException(relative);
+    }
+
+    [Fact]
+    public async Task CoverageTime_MonthlyScenarios()
+    {
+        // The real scenarios/coverage_time.yaml: 2 levels x 3 technologies, named files.
+        var config = Config();
+        var results = await Runner.RunAsync(ScenarioLoader.Load(new[] { RepoFile("scenarios/coverage_time.yaml") }),
+            config, new RunOptions());
+        Assert.True(results.All(r => r.Status == "PASS"), string.Join("; ", results.Select(r => $"{r.Scenario}: {r.Error}")));
+        Assert.Equal(6, results.Count);
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var last = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
+        var first = new DateOnly(last.Year, last.Month, 1);
+        var coverage = new Dictionary<string, string>
+        {
+            ["All"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
+            ["5G"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED",
+            ["4G"] = "4G",
+        };
+        foreach (var (level, view) in new[] { ("Net", "byCountry"), ("Province", "byRegions") })
+        {
+            foreach (var (tech, cov) in coverage)
+            {
+                var file = Path.Combine(config.OutputDir, $"VTB_{last.Year}_T{last.Month}_Coverage time_{level}_{tech}.xlsx");
+                Assert.True(File.Exists(file), file);
+                var data = ReadXlsx(file);
+                Assert.Equal("bi", data["country"]);
+                Assert.Equal($"{first:yyyy-MM-dd}..{last:yyyy-MM-dd}", data["date"]);
+                Assert.Equal("ECONET|LUMITEL|ONAMOB|SMART", data["carrier"]);
+                Assert.Equal(cov, data["coverage"]);
+                Assert.Equal(view, data["view"]);
+            }
+        }
+    }
 }

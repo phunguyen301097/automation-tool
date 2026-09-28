@@ -17,7 +17,7 @@ public class Scenario
 /// <summary>Loads scenario YAML files: vars, before/after, matrix and ${var} templating.</summary>
 public static partial class ScenarioLoader
 {
-    [GeneratedRegex(@"\$\{(\w+)\}")]
+    [GeneratedRegex(@"\$\{([\w.]+)\}")]
     private static partial Regex VarRegex();
 
     public static List<Scenario> Load(IEnumerable<string> paths)
@@ -46,7 +46,8 @@ public static partial class ScenarioLoader
 
                     var name = (string)Render(rawName, vars)!;
                     if (combo.Count > 0 && !rawName.Contains("${"))
-                        name += "[" + string.Join(",", combo.Values) + "]";
+                        name += "[" + string.Join(",", combo.Values.Select(v =>
+                            v is Dictionary<string, object?> d && d.TryGetValue("name", out var n) ? Args.Str(n) : Args.Str(v))) + "]";
                     vars["scenario"] = name;
 
                     var steps = before.Concat(List(raw.GetValueOrDefault("steps"))).Concat(after)
@@ -77,19 +78,61 @@ public static partial class ScenarioLoader
     public static Regex Glob(string pattern) =>
         new("^" + Regex.Escape(pattern).Replace(@"\*", ".*").Replace(@"\?", ".") + "$", RegexOptions.IgnoreCase);
 
-    /// <summary>Recursively substitute ${var} in strings. A string that is exactly one variable keeps the value's type.</summary>
+    /// <summary>Resolve "a" or a dotted path "a.b" (matrix values may be mappings).</summary>
+    public static bool TryLookup(IReadOnlyDictionary<string, object?> vars, string name, out object? value)
+    {
+        value = null;
+        object? current = null;
+        var first = true;
+        foreach (var part in name.Split('.'))
+        {
+            if (first)
+            {
+                if (!vars.TryGetValue(part, out current)) return false;
+                first = false;
+            }
+            else if (current is Dictionary<string, object?> d && d.TryGetValue(part, out var next))
+            {
+                current = next;
+            }
+            else
+            {
+                return false;
+            }
+        }
+        value = current;
+        return true;
+    }
+
+    private static string ToText(object? v) =>
+        v is List<object?> l ? string.Join(", ", l.Select(ToText)) : Args.Str(v);
+
+    /// <summary>
+    /// Recursively substitute ${var} / ${var.key} in strings. A string that is exactly one variable keeps
+    /// the value's type (e.g. a list of options). Unknown variables are left as is.
+    /// </summary>
     public static object? Render(object? value, IReadOnlyDictionary<string, object?> vars) => value switch
     {
-        string s when VarRegex().Match(s) is { Success: true } m && m.Length == s.Length && vars.ContainsKey(m.Groups[1].Value)
-            => vars[m.Groups[1].Value],
-        string s => VarRegex().Replace(s, m => vars.TryGetValue(m.Groups[1].Value, out var v) ? Args.Str(v) : m.Value),
+        string s when VarRegex().Match(s) is { Success: true } m && m.Length == s.Length && TryLookup(vars, m.Groups[1].Value, out var whole)
+            => whole,
+        string s => VarRegex().Replace(s, m => TryLookup(vars, m.Groups[1].Value, out var v) ? ToText(v) : m.Value),
         List<object?> list => list.Select(v => Render(v, vars)).ToList(),
         Dictionary<string, object?> map => map.ToDictionary(kv => kv.Key, kv => Render(kv.Value, vars)),
         _ => value,
     };
 
-    public static string RenderString(string template, IReadOnlyDictionary<string, object?> vars) =>
-        (string)Render(template, vars.ToDictionary(kv => kv.Key, kv => (object?)Args.Str(kv.Value)))!;
+    /// <summary>Render a template into a string; <paramref name="text"/> converts each scalar value.</summary>
+    public static string RenderString(string template, IReadOnlyDictionary<string, object?> vars, Func<string, string>? text = null)
+    {
+        text ??= t => t;
+        object? Convert(object? v) => v switch
+        {
+            Dictionary<string, object?> d => d.ToDictionary(kv => kv.Key, kv => Convert(kv.Value)),
+            List<object?> l => text(ToText(l)),
+            _ => text(Args.Str(v)),
+        };
+        return Args.Str(Render(template, vars.ToDictionary(kv => kv.Key, kv => Convert(kv.Value))));
+    }
 
     private static Step ToStep(object? raw)
     {

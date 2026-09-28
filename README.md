@@ -132,11 +132,29 @@ bỏ qua một scenario.
 | `download_table` | Bấm "Download table", chọn loại file, lưu và kiểm tra file | `{format: xlsx}` / `{format: csv}` / `{format_text: "Excel"}` |
 | `click`, `fill`, `press`, `wait`, `wait_for`, `screenshot`, `js`, `pause` | Thao tác tự do | `click: {text: "Macro data"}` |
 
+**Chọn tất cả** một filter (nút *Select All*): `select_filter: {id: carrier_filter, all: true}`.
+
+**Matrix với giá trị dạng nhóm**: mỗi giá trị có thể là một mapping, dùng lại bằng `${ten.khoa}`:
+
+```yaml
+matrix:
+  tech:
+    - {name: 5G, coverage: [5G_SA, 5G_NSA_CONNECTED, 5G_NSA_NOT_RESTRICTED, 5G_NSA_RESTRICTED]}
+    - {name: 4G, coverage: [4G]}
+steps:
+  - select_filter: {id: coverage_filter, options: "${tech.coverage}"}
+  - download_table: {format: xlsx, filename: "VTB_${year}_T${month}_Coverage time_Net_${tech.name}"}
+```
+
+Xem `scenarios/coverage_time.yaml` (Coverage time: mức toàn mạng + mức tỉnh × All/5G/4G = 6 file) làm mẫu.
+
 **Ngày** nhận các dạng `2026-08-01`, `01/08/2026`, `today`, `today-7d`, `max` (ngày mới nhất có dữ liệu,
 lấy từ `window.dateLimits` của trang), `max-30d`, `max-1m`, `min`.
 
 **Tên file** có thể dùng các biến `${scenario}`, `${country}`, `${country_code}`, `${date_from}`, `${date_to}`,
-`${timestamp}`, `${rows}` và mọi biến trong `vars`/`matrix`. Dấu `/` tạo thư mục con. Phần đuôi file được lấy
+`${year}`, `${month}` (8), `${month2}` (08), `${timestamp}`, `${rows}` và mọi biến trong `vars`/`matrix`. Năm/tháng lấy
+từ ngày bắt đầu của khoảng đã chọn (kể cả khi chọn preset như `Last month`). Khoảng trắng được giữ nguyên, chỉ
+ký tự Windows không cho phép (`<>:"/\\|?*`) bị thay bằng `_`. Dấu `/` tạo thư mục con. Phần đuôi file được lấy
 theo file server trả về.
 
 **Id các bộ lọc** (lấy từ HTML trang Coverage): `carrier_filter` (Cellular network), `coverage_filter`,

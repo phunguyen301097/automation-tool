@@ -79,4 +79,40 @@ public class ConfigTests
         Assert.Equal("#byCountry", cfg.Views["macro"]);
         Assert.Equal("#byX", cfg.Views["custom"]);
     }
+
+    [Fact]
+    public void MatrixValues_CanBeMappings()
+    {
+        var file = Path.GetTempFileName();
+        File.WriteAllText(file, """
+            vars: {kpi: Coverage time}
+            scenarios:
+              - name: ${kpi}_${level.name}
+                matrix:
+                  level:
+                    - {name: Net, opts: [4G, 3G]}
+                steps:
+                  - select_filter: {id: x, options: "${level.opts}"}
+                  - download_table: {filename: "${kpi}_${level.name}_${year}"}
+              - name: plain
+                matrix: {t: [{name: 5G}]}
+                steps: []
+            """);
+        var sc = ScenarioLoader.Load(new[] { file });
+        File.Delete(file);
+
+        Assert.Equal(new[] { "Coverage time_Net", "plain[5G]" }, sc.Select(s => s.Name));
+        var select = Assert.IsType<Dictionary<string, object?>>(sc[0].Steps[0].Args);
+        Assert.Equal(new[] { "4G", "3G" }, Args.StrList(select["options"]));
+        var download = Assert.IsType<Dictionary<string, object?>>(sc[0].Steps[1].Args);
+        // ${year} is only known at run time and stays for later.
+        Assert.Equal("Coverage time_Net_${year}", download["filename"]);
+    }
+
+    [Fact]
+    public void FileNames_KeepSpaces()
+    {
+        Assert.Equal("VTB_2026_T8_Coverage time_Net_All", Steps.SafeFileName("VTB_2026_T8_Coverage time_Net_All"));
+        Assert.Equal("a_b_c", Steps.SafeFileName("a:b?c"));
+    }
 }
