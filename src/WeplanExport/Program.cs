@@ -18,6 +18,7 @@ Commands:
       --trace                   record a Playwright trace per scenario
       -x, --stop-on-fail        stop at the first failed scenario
       --isolated                fresh browser context per scenario (default: one shared page)
+      --resume [run]            skip scenarios finished in the latest run (or downloads/_runs/<run>), run the rest
       --order page|market       page: each page for all markets, then the next page (default);
                                 market: all pages of one market, then the next market
       --dry-run                 only print the expanded scenarios
@@ -47,6 +48,7 @@ bool headed = false, trace = false, stopOnFail = false, dryRun = false, isolated
 int? slowMo = null;
 var view = "macro";
 string? order = null;
+string? resume = null;
 for (var i = 1; i < rest.Count; i++)
 {
     switch (rest[i])
@@ -59,6 +61,9 @@ for (var i = 1; i < rest.Count; i++)
         case "--trace": trace = true; break;
         case "-x" or "--stop-on-fail": stopOnFail = true; break;
         case "--dry-run": dryRun = true; break;
+        case "--resume":
+            resume = i + 1 < rest.Count && !rest[i + 1].StartsWith('-') && !rest[i + 1].EndsWith(".yaml") ? rest[++i] : "latest";
+            break;
         case "--isolated": isolated = true; break;
         case "--view": view = rest[++i]; break;
         case "--order": order = rest[++i]; break;
@@ -100,6 +105,24 @@ try
                 Console.Error.WriteLine("No scenario matched");
                 return 1;
             }
+            var done = new List<string>();
+            if (resume is not null)
+            {
+                var (report, finished) = Runner.CompletedInLastRun(config.OutputDir, resume);
+                if (report is null)
+                {
+                    Console.Error.WriteLine($"--resume: no earlier run report found in {config.OutputDir}/_runs");
+                    return 1;
+                }
+                done = scenarios.Where(s => finished.Contains(s.Name)).Select(s => s.Name).ToList();
+                scenarios = scenarios.Where(s => !finished.Contains(s.Name)).ToList();
+                Console.WriteLine($"Resuming from {report}: {done.Count} scenario(s) already done, {scenarios.Count} left.");
+                if (scenarios.Count == 0)
+                {
+                    Console.WriteLine("Nothing left to run.");
+                    return 0;
+                }
+            }
             if (dryRun)
             {
                 var serializer = new SerializerBuilder().Build();
@@ -120,6 +143,7 @@ try
                 Trace = trace,
                 StopOnFail = stopOnFail,
                 Isolated = isolated ? true : null,
+                Done = done,
             });
             return results.All(r => r.Ok) ? 0 : 1;
 

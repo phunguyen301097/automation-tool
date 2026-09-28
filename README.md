@@ -59,6 +59,7 @@ weplan-export run -t daily                  # lọc theo tag
 weplan-export run --headed --slow-mo 300    # xem trình duyệt chạy, chậm lại để quan sát
 weplan-export run --trace                   # ghi Playwright trace để debug
 weplan-export run --dry-run                 # chỉ in các bước sau khi thay biến
+weplan-export run --resume                  # chạy tiếp phần còn lại của lần chạy bị dừng
 weplan-export steps                         # danh sách các loại bước
 ```
 
@@ -69,6 +70,13 @@ weplan-export steps                         # danh sách các loại bước
   trình duyệt riêng như trước: `--isolated` (hoặc `browser.isolated: true`).
 - **Đóng cửa sổ trình duyệt** (khi `--headed`) hoặc bấm **Ctrl+C** trong terminal sẽ **dừng cả lượt chạy**: scenario
   đang chạy ghi `STOPPED`, các scenario còn lại ghi `NOT RUN`, báo cáo vẫn được in và lưu.
+
+**Chạy tiếp khi bị dừng giữa chừng**: báo cáo `downloads/_runs/<thời gian>/report.json` được ghi lại sau
+**mỗi** kịch bản, nên kể cả khi cửa sổ cmd bị đóng hay máy tắt đột ngột vẫn biết kịch bản nào đã xong. Chạy lại
+**đúng lệnh cũ** và thêm `--resume`: tool bỏ qua các kịch bản đã xong (PASS) ở lần chạy gần nhất, chạy lại kịch
+bản đang dở và phần còn lại. Resume nhiều lần liên tiếp cũng được (phần đã xong ở các lần trước được ghi là
+`DONE`). Muốn tiếp tục từ một lần chạy cụ thể: `--resume 20260928_141453` (tên thư mục trong `downloads/_runs`).
+Thêm `--dry-run` để xem trước những kịch bản sẽ chạy.
 
 **Popup thông báo** (ví dụ "What's New: *New Delta Analysis in Map View*") được **tự đóng**: trước mỗi bước và
 bất cứ khi nào popup che thao tác click, tool bấm nút đóng (`×` / Close / OK / Got it...), không được thì bấm Esc,

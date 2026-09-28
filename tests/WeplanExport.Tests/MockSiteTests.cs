@@ -647,4 +647,50 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Assert.Contains("shows country 'bi' but this scenario is for 'kh'", r.Error);
         Assert.Empty(r.Downloads);
     }
+
+    [Fact]
+    public async Task Resume_AfterInterruption()
+    {
+        // Report written after every scenario; resume skips what finished and runs the rest.
+        var config = Config();
+        var yaml = """
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}]}
+              - {name: b, steps: [{goto: /app/bi/coverage}, {check_report: null}, {interrupt_run: null}, {wait: 100}]}
+              - {name: c, steps: [{goto: /app/bi/coverage}]}
+            """;
+        var file = Path.Combine(_tmp, "resume.yaml");
+        await File.WriteAllTextAsync(file, yaml);
+
+        var seenMidRun = new Dictionary<string, string>();
+        var state = new RunState();
+        var interrupt = true;
+        Steps.Registry["check_report"] = new((ctx, _) =>
+        {
+            var (report, _) = Runner.CompletedInLastRun(config.OutputDir);
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(report!));
+            foreach (var r in doc.RootElement.EnumerateArray())
+                seenMidRun[r.GetProperty("scenario").GetString()!] = r.GetProperty("status").GetString()!;
+            return Task.CompletedTask;
+        }, "test only");
+        Steps.Registry["interrupt_run"] = new(async (ctx, _) =>
+        {
+            if (!interrupt) return;
+            state.Stop("interrupted (Ctrl+C)"); // same as the Ctrl+C handler
+            await ctx.Page.CloseAsync();
+        }, "test only");
+
+        var first = await Runner.RunAsync(ScenarioLoader.Load(new[] { file }), config, new RunOptions(), state);
+        Assert.Equal(new[] { "PASS", "STOPPED", "NOT RUN" }, first.Select(r => r.Status));
+        // While b was running, the report already had a finished and b/c pending.
+        Assert.Equal(new Dictionary<string, string> { ["a"] = "PASS", ["b"] = "NOT RUN", ["c"] = "NOT RUN" }, seenMidRun);
+
+        interrupt = false;
+        var (_, finished) = Runner.CompletedInLastRun(config.OutputDir);
+        Assert.Equal(new HashSet<string> { "a" }, finished);
+        var left = ScenarioLoader.Load(new[] { file }).Where(s => !finished.Contains(s.Name)).ToList();
+        var second = await Runner.RunAsync(left, config, new RunOptions { Done = finished.ToList() });
+        Assert.Equal(new[] { "DONE", "PASS", "PASS" }, second.Select(r => r.Status));
+        Assert.Equal(new HashSet<string> { "a", "b", "c" }, Runner.CompletedInLastRun(config.OutputDir).Finished);
+    }
 }

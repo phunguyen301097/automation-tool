@@ -26,6 +26,8 @@ public class RunOptions
     public bool StopOnFail { get; init; }
     /// <summary>Fresh browser context per scenario instead of one shared page (null: config).</summary>
     public bool? Isolated { get; init; }
+    /// <summary>Scenarios finished in an earlier run (--resume): recorded as DONE in this run's report.</summary>
+    public List<string> Done { get; init; } = new();
 }
 
 /// <summary>Tracks whether the user closed the browser / pressed Ctrl+C, to stop the whole run.</summary>
@@ -264,7 +266,21 @@ public static class Runner
         var runId = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var outRoot = config.OutputDir;
         var artifactsDir = Path.Combine(outRoot, "_runs", runId);
+        for (var n = 2; Directory.Exists(artifactsDir); n++) // two runs in the same second
+            artifactsDir = Path.Combine(outRoot, "_runs", $"{runId}_{n}");
         var results = new List<ScenarioResult>();
+        var earlier = opts.Done.Select(n => new ScenarioResult { Scenario = n, Ok = true, Status = "DONE" }).ToList();
+
+        // The report is rewritten after every scenario, so it survives the process being killed.
+        void SaveProgress()
+        {
+            var ran = results.Select(r => r.Scenario).ToHashSet();
+            var pending = scenarios.Where(s => !ran.Contains(s.Name))
+                .Select(s => new ScenarioResult { Scenario = s.Name, Status = "NOT RUN" });
+            WriteReportJson(earlier.Concat(results).Concat(pending).ToList(), artifactsDir);
+        }
+
+        SaveProgress();
 
         // Ctrl+C: record the stop and close the page so the running step ends right away.
         ConsoleCancelEventHandler onCancel = (_, e) =>
@@ -409,6 +425,7 @@ public static class Runner
                     }
                 }
                 results.Add(res);
+                SaveProgress();
                 previousFailed = !res.Ok;
                 Log(state.StopReason is not null
                     ? $"=== STOPPED {sc.Name}: {state.StopReason} -> stopping the run"
@@ -435,8 +452,9 @@ public static class Runner
             pw?.Dispose();
         }
 
-        WriteReport(results, artifactsDir, state.StopReason);
-        return results;
+        var all = earlier.Concat(results).ToList();
+        WriteReport(all, artifactsDir, state.StopReason);
+        return all;
     }
 
     private static async Task SaveSessionAsync(IPage page, AppConfig config)
@@ -463,19 +481,51 @@ public static class Runner
 
     private static string Safe(string s) => Regex.Replace(s, @"[^\w.\-]+", "_").Trim('_');
 
-    private static void WriteReport(List<ScenarioResult> results, string artifactsDir, string? stopReason)
+    private static readonly JsonSerializerOptions ReportJson = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>Write report.json atomically (a killed process never leaves a half-written file).</summary>
+    private static void WriteReportJson(List<ScenarioResult> results, string artifactsDir)
     {
         Directory.CreateDirectory(artifactsDir);
+        var tmp = Path.Combine(artifactsDir, "report.json.tmp");
+        File.WriteAllText(tmp, JsonSerializer.Serialize(results, ReportJson));
+        File.Move(tmp, Path.Combine(artifactsDir, "report.json"), overwrite: true);
+    }
+
+    /// <summary>Scenarios finished (PASS or DONE) in the latest run, or in <paramref name="run"/> (a folder of downloads/_runs).</summary>
+    public static (string? Report, HashSet<string> Finished) CompletedInLastRun(string outputDir, string? run = null)
+    {
+        var runs = Path.Combine(outputDir, "_runs");
+        string? report;
+        if (run is not null && run != "latest")
+            report = Directory.Exists(run) ? Path.Combine(run, "report.json") : Path.Combine(runs, run, "report.json");
+        else
+            report = Directory.Exists(runs)
+                ? Directory.GetDirectories(runs).Order().Select(d => Path.Combine(d, "report.json")).LastOrDefault(File.Exists)
+                : null;
+        if (report is null || !File.Exists(report)) return (null, new());
+        using var doc = JsonDocument.Parse(File.ReadAllText(report));
+        var finished = doc.RootElement.EnumerateArray()
+            .Where(r => r.GetProperty("status").GetString() is "PASS" or "DONE")
+            .Select(r => r.GetProperty("scenario").GetString()!)
+            .ToHashSet();
+        return (report, finished);
+    }
+
+    private static void WriteReport(List<ScenarioResult> results, string artifactsDir, string? stopReason)
+    {
+        WriteReportJson(results, artifactsDir);
         var reportPath = Path.Combine(artifactsDir, "report.json");
-        File.WriteAllText(reportPath, JsonSerializer.Serialize(results, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        }));
+        var earlier = results.Count(r => r.Status == "DONE");
         Console.WriteLine();
+        if (earlier > 0) Console.WriteLine($"DONE in an earlier run (skipped): {earlier} scenario(s)");
         Console.WriteLine($"{"RESULT",-8} {"TIME",7}  SCENARIO / FILE");
-        foreach (var r in results)
+        foreach (var r in results.Where(r => r.Status != "DONE"))
         {
             Console.WriteLine($"{r.Status,-8} {r.Seconds,6}s  {r.Scenario}");
             foreach (var d in r.Downloads) Console.WriteLine($"{"",18}-> {d.File} ({d.DataRows} rows)");
@@ -484,6 +534,8 @@ public static class Runner
             foreach (var a in r.Artifacts) Console.WriteLine($"{"",18}   {a}");
         }
         if (stopReason is not null) Console.WriteLine($"\nRun stopped: {stopReason}.");
-        Console.WriteLine($"\n{results.Count(r => r.Ok)}/{results.Count} passed. Report: {reportPath}");
+        Console.WriteLine($"\n{results.Count(r => r.Ok)}/{results.Count} done. Report: {reportPath}");
+        var left = results.Count(r => !r.Ok);
+        if (left > 0) Console.WriteLine($"{left} scenario(s) not finished: run the same command again with --resume to continue.");
     }
 }
