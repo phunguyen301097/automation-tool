@@ -21,7 +21,11 @@ class Context:
         self.scenario = scenario
         self.output_dir = output_dir
         self.log = log
-        self.vars: dict[str, Any] = dict(scenario.vars)
+        # Report month defaults to the previous calendar month; set_date overrides it with the
+        # month actually selected (e.g. Topology Stock has no date filter).
+        last = dt.date.today().replace(day=1) - dt.timedelta(days=1)
+        self.vars: dict[str, Any] = {"year": last.year, "month": last.month, "month2": f"{last.month:02d}",
+                                     **scenario.vars}
         self.downloads: list[dict] = []
 
     @property
@@ -401,10 +405,43 @@ _SELECT_ALL_JS = """
 """
 
 
+_SELECT_BY_LABEL_JS = """
+(wanted) => {
+    const norm = s => s.replace(/\\(.*?\\)/g, ' ').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const w = norm(wanted);
+    const labels = Array.from(document.querySelectorAll('label'))
+        .filter(l => !l.closest('.modal') && norm(l.textContent) === w);
+    for (const l of labels) {
+        let sel = l.htmlFor ? document.getElementById(l.htmlFor) : null;
+        if (!sel || sel.tagName !== 'SELECT') {
+            const box = l.closest('.form-group, .form-group-sm, .col, div');
+            sel = box ? box.querySelector('select') : null;
+        }
+        if (sel) {
+            if (!sel.id) sel.setAttribute('data-weplan-label', wanted);
+            return sel.id ? '#' + CSS.escape(sel.id) : `select[data-weplan-label="${wanted}"]`;
+        }
+    }
+    return null;
+}
+"""
+
+
+def _select_by_label(ctx: Context, label: str) -> str:
+    """CSS selector of the <select> whose label reads `label` (counters like "(1 active)" ignored)."""
+    deadline = time.time() + ctx.timeouts["default"] / 1000
+    while (css := ctx.page.evaluate(_SELECT_BY_LABEL_JS, label)) is None:
+        if time.time() > deadline:
+            raise StepError(f"No filter labelled '{label}' found on the page")
+        ctx.page.wait_for_timeout(500)
+    ctx.log(f"  filter '{label}' -> {css}")
+    return css
+
+
 @step("select_filter", "select", "filter")
 def select_filter(ctx: Context, args: dict) -> None:
-    """args: {id: carrier_filter, options: [ECONET], clear: true, mode: js|ui} or {id: ..., all: true}"""
-    css = args.get("selector") or f"#{args['id']}"
+    """args: {id: carrier_filter | label: "Technology", options: [ECONET], clear: true, mode: js|ui, all: true}"""
+    css = args.get("selector") or (f"#{args['id']}" if args.get("id") else _select_by_label(ctx, args["label"]))
     values = [str(v) for v in _as_list(args.get("options", args.get("value")))]
     clear = args.get("clear", True)
     mode = args.get("mode", "js")

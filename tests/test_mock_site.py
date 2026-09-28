@@ -392,34 +392,55 @@ def test_coverage_time_monthly_scenarios(config):
             assert data["view"] == view
 
 
-PAGE_SCENARIOS = {
-    # file: (KPI in file name, page path, has Coverage type split)
-    "network_availability.yaml": ("Network availability", "/app/bi/networkAvailabilityMobile", True),
-    "sample.yaml": ("Sample", "/app/bi/sample", False),
-    "speed_test_throughput.yaml": ("Speed test Throughput", "/app/bi/speedTestThruMobile", True),
-    "web_performance_times.yaml": ("Web performance times", "/app/bi/webPerformanceTimesMobile", True),
-    "video_streaming_times.yaml": ("Video Streaming times", "/app/bi/youtubeTimesMobile", True),
+# file -> (page path, [(name part after VTB_<year>_T<month>_, expected mock state)])
+_COV = {"All": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
+        "5G": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED", "4G": "4G"}
+
+
+def _coverage_kpi(kpi):
+    return [(f"{kpi}_{lvl}_{t}", {"coverage": _COV[t]}) for lvl in ("Net", "Province") for t in ("All", "5G", "4G")]
+
+
+KPI_SCENARIOS = {
+    "signal_strength.yaml": ("/app/bi/signal", _coverage_kpi("Signal strength")),
+    "data_traffic.yaml": ("/app/bi/traffic", _coverage_kpi("Data traffic")),
+    "latency.yaml": ("/app/bi/latencyMobile", _coverage_kpi("Latency")),
+    "packet_loss.yaml": ("/app/bi/latencyPacketLossMobile", _coverage_kpi("Packet Loss")),
+    "throughput.yaml": ("/app/bi/globalThroughputNetwork", _coverage_kpi("throughput")),
+    "network_availability.yaml": ("/app/bi/networkAvailabilityMobile", _coverage_kpi("Network availability")),
+    "speed_test.yaml": ("/app/bi/speedTestThruMobile", _coverage_kpi("Speed test")),
+    "web_performance.yaml": ("/app/bi/webPerformanceTimesMobile",
+                             [(n, {**st, "dimension": "request_time"}) for n, st in _coverage_kpi("Time to first byte")]),
+    "video_streaming.yaml": ("/app/bi/youtubeTimesMobile",
+                             [(n, {**st, "dimension": "start_time"}) for n, st in _coverage_kpi("Video Start time")]),
+    "sample.yaml": ("/app/bi/sample", [("Sample_Net_All", {}), ("Sample_Province_All", {})]),
+    "mobile_quality_score.yaml": ("/app/bi/compositeMobileQualityScore",
+                                  [(f"{q}_{lvl}_All", {"mqs": q}) for lvl in ("Net", "Province")
+                                   for q in ("Excellent", "Sufficient", "Insufficient")]),
+    "topology_stock.yaml": ("/app/bi/topologyStock",
+                            [(f"Topology Stock_{lvl}_{t}", {"technology": tech, "date": "null"}) for lvl in ("Net", "Province")
+                             for t, tech in (("5G", "NR"), ("4G", "LTE"), ("3G", "UMTS"), ("2G", "GSM"))]),
 }
 
 
-@pytest.mark.parametrize("file_name", sorted(PAGE_SCENARIOS))
-def test_monthly_page_scenarios(config, file_name):
+@pytest.mark.parametrize("file_name", sorted(KPI_SCENARIOS))
+def test_monthly_kpi_scenarios(config, file_name):
+    """Every file of scenarios/ from Weplan_export.docx: names and the filters actually applied."""
     import datetime as dt
-    kpi, path, split = PAGE_SCENARIOS[file_name]
+    path, expected = KPI_SCENARIOS[file_name]
     scenario_file = Path(__file__).parent.parent / "scenarios" / file_name
     results = run_scenarios(load_scenarios([scenario_file]), config)
-    techs = ["All", "5G", "4G"] if split else ["All"]
-    assert [r.status for r in results] == ["PASS"] * 2 * len(techs), [r.error for r in results]
+    assert [r.status for r in results] == ["PASS"] * len(expected), [r.error for r in results]
 
     last = dt.date.today().replace(day=1) - dt.timedelta(days=1)
     out = Path(config["output_dir"])
-    for level, view in (("Net", "byCountry"), ("Province", "byRegions")):
-        for tech in techs:
-            f = out / f"VTB_{last.year}_T{last.month}_{kpi}_{level}_{tech}.xlsx"
-            assert f.exists(), f
-            data = _xlsx_dict(f)
-            assert data["kpi"] == path
-            assert data["view"] == view
-            assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
-            if tech == "4G":
-                assert data["coverage"] == "4G"
+    assert len(list(out.glob("*.xlsx"))) == len(expected)
+    for name, state in expected:
+        f = out / f"VTB_{last.year}_T{last.month}_{name}.xlsx"
+        assert f.exists(), f
+        data = _xlsx_dict(f)
+        assert data["kpi"] == path
+        assert data["view"] == ("byCountry" if "_Net_" in name else "byRegions")
+        assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
+        for key, value in state.items():
+            assert (data.get(key) or "") == value, (name, key)

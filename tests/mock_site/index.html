@@ -56,6 +56,18 @@
     <select id="origin_filter" class="selectpicker basicFilter" multiple>
       <option value="Viettel">Viettel</option><option value="Weplan">Weplan</option>
     </select>
+    <div class="form-group"><label class="col-12 p-0" for="technology_filter">Technology</label>
+      <select id="technology_filter" class="selectpicker basicFilter" multiple>
+        <option value="NR">NR</option><option value="LTE">LTE</option><option value="UMTS">UMTS</option><option value="GSM">GSM</option>
+      </select></div>
+    <div class="form-group"><label class="col-12 p-0"><i class="fa fa-star"></i> Mobile Quality Score <span>(1 active)</span></label>
+      <select class="selectpicker basicFilter" multiple>
+        <option value="excellent" selected>Excellent</option><option value="sufficient">Sufficient</option><option value="insufficient">Insufficient</option>
+      </select></div>
+    <select id="dimension_filter" class="selectpicker basicFilter">
+      <option value="request_time">3. Request time (Time to first byte) (ms)</option><option value="duration">7. Total loading time (ms)</option>
+      <option value="start_time">Video start time (s)</option><option value="buffer_time">Video stall/buffer time (s)</option>
+    </select>
     <select class="form-control selectpicker" id="group_selector">
       <option value="all">All</option><option value="carrier">Cellular network</option>
     </select>
@@ -273,11 +285,13 @@ document.querySelectorAll('.basicFilter, #group_selector').forEach(s => s.addEve
 function state() {
   const sel = id => Array.from($(id).selectedOptions).map(o => o.value).join('|');
   return {country, date: dateRange, carrier: sel('#carrier_filter'), coverage: sel('#coverage_filter'),
-          origin: sel('#origin_filter'), group: $('#group_selector').value, kpi: location.pathname};
+          origin: sel('#origin_filter'), group: $('#group_selector').value, kpi: location.pathname,
+          technology: sel('#technology_filter'), dimension: $('#dimension_filter').value, mqs: Array.from(document.querySelectorAll('#basicFiltersRow select:not([id]) option'))
+            .filter(o => o.selected).map(o => o.text).join('|')};
 }
 
 function runQuery(view) {
-  if (!dateRange) { $('#errors_row').classList.remove('d-none'); $('#error_message').textContent = 'No date selected'; return; }
+  if (!dateRange && !location.pathname.includes('topology')) { $('#errors_row').classList.remove('d-none'); $('#error_message').textContent = 'No date selected'; return; }
   $('#updateButtonRow').classList.add('d-none');
   $('#results').classList.add('d-none');
   $('#loader').classList.remove('d-none');
