@@ -1,4 +1,4 @@
-# Kịch bản mẫu: Coverage time -> chọn thời gian, mạng, quốc gia -> Macro data
+# Kịch bản mẫu (KHÔNG chạy mặc định): Coverage time -> chọn thời gian, mạng, quốc gia -> Macro data
 # -> chờ table -> chọn loại file -> Download table.
 #
 # Biến dùng chung cho cả file; dùng lại bằng ${ten_bien}.

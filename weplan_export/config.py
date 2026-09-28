@@ -7,7 +7,6 @@ import itertools
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from string import Template
 from typing import Any
 
 import yaml
@@ -131,17 +130,42 @@ class Scenario:
     tags: list[str] = field(default_factory=list)
 
 
-_VAR_RE = re.compile(r"\$\{(\w+)\}")
+_VAR_RE = re.compile(r"\$\{([\w.]+)\}")
+_MISSING = object()
+
+
+def lookup(variables: dict[str, Any], name: str) -> Any:
+    """Resolve "a" or a dotted path "a.b" (matrix values may be mappings)."""
+    value: Any = variables
+    for part in name.split("."):
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        else:
+            return _MISSING
+    return value
+
+
+def _to_text(v: Any) -> str:
+    if isinstance(v, list):
+        return ", ".join(_to_text(x) for x in v)
+    return str(v)
 
 
 def render(value: Any, variables: dict[str, Any]) -> Any:
-    """Recursively substitute ${var} in strings."""
+    """Recursively substitute ${var} / ${var.key} in strings. Unknown variables are left as is."""
     if isinstance(value, str):
-        # Keep native types when the whole string is one variable.
+        # Keep native types (e.g. a list of options) when the whole string is one variable.
         m = _VAR_RE.fullmatch(value)
-        if m and m.group(1) in variables:
-            return variables[m.group(1)]
-        return Template(value).safe_substitute({k: str(v) for k, v in variables.items()})
+        if m:
+            v = lookup(variables, m.group(1))
+            if v is not _MISSING:
+                return v
+
+        def sub(match: re.Match) -> str:
+            v = lookup(variables, match.group(1))
+            return match.group(0) if v is _MISSING else _to_text(v)
+
+        return _VAR_RE.sub(sub, value)
     if isinstance(value, list):
         return [render(v, variables) for v in value]
     if isinstance(value, dict):
@@ -177,7 +201,8 @@ def load_scenarios(paths: list[str | Path]) -> list[Scenario]:
                 variables = {**file_vars, **(raw.get("vars") or {}), **combo}
                 name = render(raw.get("name", p.stem), variables)
                 if combo and "${" not in str(raw.get("name", "")):
-                    name = name + "[" + ",".join(f"{v}" for v in combo.values()) + "]"
+                    label = lambda v: str(v.get("name", v)) if isinstance(v, dict) else str(v)
+                    name = name + "[" + ",".join(label(v) for v in combo.values()) + "]"
                 variables["scenario"] = name
                 steps = render(before + (raw.get("steps") or []) + after, variables)
                 result.append(Scenario(name=name, steps=steps, vars=variables,

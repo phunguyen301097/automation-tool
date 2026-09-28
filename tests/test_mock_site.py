@@ -362,3 +362,31 @@ def test_announcement_popup_without_working_close_button_is_removed(tmp_path, co
     results = _run(tmp_path, config, _announce_flow("stuck"))
     assert [r.status for r in results] == ["PASS", "PASS"], [r.error for r in results]
     assert "(removed)" in capsys.readouterr().out
+
+
+def test_coverage_time_monthly_scenarios(config):
+    """The real scenarios/coverage_time.yaml: 2 levels x 3 technologies, named files."""
+    import datetime as dt
+    scenario_file = Path(__file__).parent.parent / "scenarios" / "coverage_time.yaml"
+    results = run_scenarios(load_scenarios([scenario_file]), config)
+    assert [r.status for r in results] == ["PASS"] * 6, [r.error for r in results]
+
+    today = dt.date.today()
+    last = today.replace(day=1) - dt.timedelta(days=1)
+    first = last.replace(day=1)
+    expected_coverage = {
+        "All": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
+        "5G": "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED",
+        "4G": "4G",
+    }
+    out = Path(config["output_dir"])
+    for level, view in (("Net", "byCountry"), ("Province", "byRegions")):
+        for tech, coverage in expected_coverage.items():
+            f = out / f"VTB_{last.year}_T{last.month}_Coverage time_{level}_{tech}.xlsx"
+            assert f.exists(), f
+            data = _xlsx_dict(f)
+            assert data["country"] == "bi"
+            assert data["date"] == f"{first.isoformat()}..{last.isoformat()}"
+            assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
+            assert data["coverage"] == coverage
+            assert data["view"] == view

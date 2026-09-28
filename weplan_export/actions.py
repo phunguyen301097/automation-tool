@@ -385,14 +385,33 @@ def _select_ui(ctx: Context, css: str, values: list, clear: bool) -> list[str]:
     )
 
 
+_SELECT_ALL_JS = """
+(sel) => {
+    const el = document.querySelector(sel);
+    const opts = Array.from(el.options).filter(o => !o.disabled && o.value !== '');
+    if (!opts.length) return null;
+    opts.forEach(o => o.selected = true);
+    const $ = window.jQuery;
+    if ($ && $.fn && $.fn.selectpicker) { try { $(el).selectpicker('refresh'); } catch (e) {} }
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    if ($) { try { $(el).trigger('changed.bs.select'); } catch (e) {} }
+    return opts.map(o => o.text.trim());
+}
+"""
+
+
 @step("select_filter", "select", "filter")
 def select_filter(ctx: Context, args: dict) -> None:
-    """args: {id: carrier_filter, options: [ECONET], clear: true, mode: js|ui}"""
+    """args: {id: carrier_filter, options: [ECONET], clear: true, mode: js|ui} or {id: ..., all: true}"""
     css = args.get("selector") or f"#{args['id']}"
     values = [str(v) for v in _as_list(args.get("options", args.get("value")))]
     clear = args.get("clear", True)
     mode = args.get("mode", "js")
     ctx.page.wait_for_selector(css, state="attached", timeout=ctx.timeouts["default"])
+    if args.get("all"):
+        _select_all(ctx, css, mode)
+        return
     if not values:
         ctx.log(f"  clear {css}")
         ctx.page.evaluate(
@@ -408,6 +427,25 @@ def select_filter(ctx: Context, args: dict) -> None:
     else:
         selected = _set_select_values(ctx, css, values, clear, args.get("wait_options_ms"))
     ctx.log(f"  {css} = {selected}")
+
+
+def _select_all(ctx: Context, css: str, mode: str) -> None:
+    """Select every option ("Select All"). Waits for options that load asynchronously."""
+    page = ctx.page
+    deadline = time.time() + ctx.timeouts["default"] / 1000
+    if mode == "ui":
+        wrapper = page.locator(f".bootstrap-select:has({css})").first
+        wrapper.locator(".dropdown-toggle").first.click()
+        wrapper.locator(".bs-select-all").first.click()
+        page.keyboard.press("Escape")
+        selected = page.evaluate(
+            "(sel) => Array.from(document.querySelector(sel).selectedOptions).map(o => o.text.trim())", css)
+    else:
+        while (selected := page.evaluate(_SELECT_ALL_JS, css)) is None:
+            if time.time() > deadline:
+                raise StepError(f"'{css}' has no options to select")
+            page.wait_for_timeout(500)
+    ctx.log(f"  {css} = all {len(selected)}: {selected}")
 
 
 @step("filters")
@@ -430,8 +468,15 @@ def set_date(ctx: Context, args: dict) -> None:
 
     if mode == "preset":
         ctx.log(f"  date preset -> {args['preset']}")
+        before = _date_widget_text(ctx)
         _open_datepicker(ctx)
-        page.get_by_text(_text_regex(args["preset"], exact=True)).first.click()
+        items = _visible(page.get_by_text(_text_regex(args["preset"], exact=True)))
+        if not items:
+            raise StepError(f"Preset '{args['preset']}' not found in the date picker")
+        items[0].click()
+        _click_apply_if_visible(ctx)
+        page.keyboard.press("Escape")
+        _read_preset_range(ctx, dcfg, before)
         return
 
     d_from = parse_date(ctx, args["from"])
@@ -443,8 +488,7 @@ def set_date(ctx: Context, args: dict) -> None:
         ctx.log(f"  WARNING: {d_from} < dashboard minDate {limits['minDate']}")
     if limits.get("maxDate") and d_to > limits["maxDate"]:
         ctx.log(f"  WARNING: {d_to} > dashboard maxDate {limits['maxDate']}")
-    ctx.vars["date_from"] = d_from.isoformat()
-    ctx.vars["date_to"] = d_to.isoformat()
+    _set_date_vars(ctx, d_from, d_to)
 
     fmt = dcfg["input_format"]
     cal = dcfg["calendar"]
@@ -473,6 +517,35 @@ def set_date(ctx: Context, args: dict) -> None:
     _click_apply_if_visible(ctx)
     page.keyboard.press("Escape")
     _verify_date_shown(ctx, expected)
+
+
+def _set_date_vars(ctx: Context, d_from: dt.date, d_to: dt.date) -> None:
+    """Variables for file names: ${date_from} ${date_to} ${year} ${month} (8) ${month2} (08)."""
+    ctx.vars.update(date_from=d_from.isoformat(), date_to=d_to.isoformat(),
+                    year=d_from.year, month=d_from.month, month2=f"{d_from.month:02d}")
+
+
+def _read_preset_range(ctx: Context, dcfg: dict, before: str) -> None:
+    """After clicking a preset, read the range the widget shows and set the date variables."""
+    fmt = dcfg["input_format"]
+    pattern = re.compile(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
+    shown = ""
+    for i in range(16):
+        shown = _date_widget_text(ctx)
+        if shown != before or i >= 4:
+            dates = []
+            for token in pattern.findall(shown):
+                try:
+                    dates.append(dt.datetime.strptime(token, fmt).date())
+                except ValueError:
+                    pass
+            if len(dates) >= 2:
+                _set_date_vars(ctx, dates[0], dates[1])
+                ctx.log(f"  date widget shows: '{shown}' -> {dates[0]} .. {dates[1]}")
+                return
+        ctx.page.wait_for_timeout(250)
+    raise StepError(f"Could not read the date range after the preset (widget shows '{shown}'). "
+                    "Check date.input_format")
 
 
 _CALENDAR_JS = (Path(__file__).parent / "calendar.js").read_text(encoding="utf-8")
@@ -871,10 +944,17 @@ def _safe(s: str) -> str:
     return re.sub(r"[^\w.\-]+", "_", s).strip("_")
 
 
+def _safe_filename(s: str) -> str:
+    """Keep spaces and letters; drop only characters Windows does not allow in file names."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", s)
+    return s.strip().rstrip(".")
+
+
 def _render_filename(template: str, variables: dict) -> str:
-    from string import Template
-    raw = Template(template).safe_substitute({k: _safe(str(v)) for k, v in variables.items()})
-    return "/".join(_safe(part) for part in raw.split("/"))
+    from .config import render
+    raw = render(template, {k: (_safe_filename(str(v)) if not isinstance(v, dict) else v)
+                            for k, v in variables.items()})
+    return "/".join(_safe_filename(part) for part in str(raw).split("/"))
 
 
 def _verify_file(path: Path) -> int:

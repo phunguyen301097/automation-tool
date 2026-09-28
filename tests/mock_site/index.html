@@ -48,7 +48,10 @@
     <div id="datepicker"><input type="text" class="p-inputtext"></div>
     <select id="carrier_filter" class="selectpicker basicFilter" multiple></select>
     <select id="coverage_filter" class="selectpicker basicFilter" multiple>
-      <option value="2G">2G</option><option value="3G">3G</option><option value="4G">4G</option>
+      <option value="5G_SA">5G_SA</option><option value="5G_NSA_CONNECTED">5G_NSA_CONNECTED</option>
+      <option value="5G_NSA_NOT_RESTRICTED">5G_NSA_NOT_RESTRICTED</option><option value="5G_NSA_RESTRICTED">5G_NSA_RESTRICTED</option>
+      <option value="4G">4G</option><option value="3G">3G</option><option value="2G">2G</option>
+      <option value="LIMITED">Limited</option><option value="NO_SIGNAL">No signal</option>
     </select>
     <select id="origin_filter" class="selectpicker basicFilter" multiple>
       <option value="Viettel">Viettel</option><option value="Weplan">Weplan</option>
@@ -109,7 +112,7 @@ if (announce && localStorage.getItem('changelogSeen') !== 'delta') setTimeout(()
   };
 }, 1500);
 const country = params.get('country') || 'bi';
-const carriers = {bi: ['ECONET', 'LUMITEL', 'ONAMOB'], kh: ['CELLCARD', 'METFONE', 'SMART'], ht: ['DIGICEL', 'NATCOM']};
+const carriers = {bi: ['ECONET', 'LUMITEL', 'ONAMOB', 'SMART'], kh: ['CELLCARD', 'METFONE', 'SMART'], ht: ['DIGICEL', 'NATCOM']};
 const $ = s => document.querySelector(s);
 document.getElementById('kpiTitle').textContent = location.pathname;
 $('#dropdownCountryChooser').value = country;
@@ -174,6 +177,14 @@ function openRealPicker() {
     pop.innerHTML = '<div class="q7" style="display:flex;flex-direction:column;padding-right:8px">' +
       ['Last 7 days', 'Last 30 days', 'Current month', 'Last month'].map(t => `<span class="q8">${t}</span>`).join('') +
       '</div>' + month(view, 'left') + month(new Date(view.getFullYear(), view.getMonth() + 1, 1), 'right');
+    pop.querySelectorAll('.q8').forEach(p => p.onclick = e => {
+      e.stopPropagation();
+      if (p.textContent !== 'Last month') return;
+      const now = new Date(), a = new Date(now.getFullYear(), now.getMonth() - 1, 1), b = new Date(now.getFullYear(), now.getMonth(), 0);
+      setRange(isoOf(a), isoOf(b));
+      $('#datepicker span').textContent = `${dmy(a)} - ${dmy(b)}`;
+      pop.remove();
+    });
     pop.querySelector('.q3a').onclick = e => { e.stopPropagation(); view = new Date(view.getFullYear(), view.getMonth() - 1, 1); render(); };
     pop.querySelector('.q3b').onclick = e => { e.stopPropagation(); view = new Date(view.getFullYear(), view.getMonth() + 1, 1); render(); };
     pop.querySelectorAll('.q6').forEach(c => c.onclick = e => {

@@ -46,3 +46,21 @@ def test_matrix_vars_before_after(tmp_path):
     ]
     assert [s.name for s in filter_scenarios(sc, ["a_*"], None)] == ["a_X", "a_Y"]
     assert [s.name for s in filter_scenarios(sc, None, ["t1"])] == ["a_X", "a_Y"]
+
+
+def test_matrix_values_can_be_mappings(tmp_path):
+    f = tmp_path / "s.yaml"
+    f.write_text(yaml.safe_dump({
+        "vars": {"kpi": "Coverage time"},
+        "scenarios": [
+            {"name": "${kpi}_${level.name}", "matrix": {"level": [{"name": "Net", "opts": ["4G", "3G"]}]},
+             "steps": [{"select_filter": {"id": "x", "options": "${level.opts}"}},
+                       {"download_table": {"filename": "${kpi}_${level.name}_${year}"}}]},
+            {"name": "plain", "matrix": {"t": [{"name": "5G"}]}, "steps": []},
+        ],
+    }))
+    sc = load_scenarios([f])
+    assert [s.name for s in sc] == ["Coverage time_Net", "plain[5G]"]
+    assert sc[0].steps[0]["select_filter"]["options"] == ["4G", "3G"]
+    # ${year} is only known at run time and stays for later.
+    assert sc[0].steps[1]["download_table"]["filename"] == "Coverage time_Net_${year}"
