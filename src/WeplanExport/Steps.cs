@@ -1023,16 +1023,19 @@ public static class Steps
 
     // ------------------------------------------------------------------ download
 
-    /// <summary>Menu items of "Download table": As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG.</summary>
-    private static readonly Dictionary<string, string> FormatText = new()
+    /// <summary>
+    /// Menu items of "Download table": As XLSX / As JSON / As CSV / As PDF / As TXT / As PNG. Exact labels
+    /// first; the loose patterns (whole words only: "Excellent" is not "Excel") only when no exact item exists.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> FormatText = new()
     {
-        ["xlsx"] = @"^\s*As XLSX\s*$|excel|xlsx",
-        ["xls"] = @"^\s*As XLS\s*$|excel",
-        ["csv"] = @"^\s*As CSV\s*$",
-        ["json"] = @"^\s*As JSON\s*$",
-        ["pdf"] = @"^\s*As PDF\s*$",
-        ["txt"] = @"^\s*As TXT\s*$",
-        ["png"] = @"^\s*As PNG\s*$",
+        ["xlsx"] = new[] { @"^\s*As XLSX\s*$", @"\b(excel|xlsx)\b" },
+        ["xls"] = new[] { @"^\s*As XLS\s*$", @"\bexcel\b" },
+        ["csv"] = new[] { @"^\s*As CSV\s*$", @"\bcsv\b" },
+        ["json"] = new[] { @"^\s*As JSON\s*$", @"\bjson\b" },
+        ["pdf"] = new[] { @"^\s*As PDF\s*$" },
+        ["txt"] = new[] { @"^\s*As TXT\s*$" },
+        ["png"] = new[] { @"^\s*As PNG\s*$" },
     };
 
     public static async Task DownloadTableAsync(StepContext ctx, object? args)
@@ -1054,15 +1057,17 @@ public static class Steps
         await btn.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = ctx.Timeouts.Default });
         await btn.ScrollIntoViewIfNeededAsync();
 
-        Regex? optionRe = a.Get("format_text") is { } ft ? TextRegex(ft)
-            : fmt != "" ? new Regex(FormatText.GetValueOrDefault(fmt, Regex.Escape(fmt)), RegexOptions.IgnoreCase)
-            : null;
+        var optionRes = a.Get("format_text") is { } ft ? new List<Regex> { TextRegex(ft, exact: true) }
+            : fmt != "" ? FormatText.GetValueOrDefault(fmt, new[] { $@"^\s*As {Regex.Escape(fmt)}\s*$" })
+                .Select(p => new Regex(p, RegexOptions.IgnoreCase)).ToList()
+            : new List<Regex>();
+        var optionRe = optionRes.FirstOrDefault();
 
         ctx.Log($"  click '{buttonText}'" + (optionRe is null ? "" : $" -> {optionRe}"));
         var download = await page.RunAndWaitForDownloadAsync(async () =>
         {
             await btn.ClickAsync();
-            if (optionRe is not null) await ClickFormatOptionAsync(ctx, btn, optionRe);
+            if (optionRe is not null) await ClickFormatOptionAsync(ctx, btn, optionRes);
         }, new() { Timeout = ctx.Timeouts.Download });
 
         var suggested = download.SuggestedFilename ?? "table";
@@ -1098,35 +1103,51 @@ public static class Steps
             throw new StepException($"Dashboard shows country '{shown}' but this scenario is for '{Args.Str(want)}': not exporting");
     }
 
-    /// <summary>After clicking the download button, pick the file-type item if a menu/modal appears.</summary>
-    private static async Task ClickFormatOptionAsync(StepContext ctx, ILocator btn, Regex optionRe)
+    private const string MenuItems = "a, button, li, [role=menuitem], [role=option], .dropdown-item, .p-menuitem-link";
+    private const string OpenMenus = ".dropdown-menu.show, .dropdown-menu:visible, [role=menu], .p-menu, .p-tieredmenu, " +
+                                     ".p-contextmenu, .modal.show";
+
+    /// <summary>After clicking the download button, pick the file-type item in the menu it opened.</summary>
+    private static async Task ClickFormatOptionAsync(StepContext ctx, ILocator btn, List<Regex> optionRes)
     {
-        var candidates = ctx.Page.Locator(
-            ".dropdown-menu.show a, .dropdown-menu.show button, .dropdown-menu.show li, " +
-            ".p-menu a, .p-menuitem-link, .p-tieredmenu a, .modal.show button, .modal.show a, " +
-            "[role=menuitem], [role=option], button, a, label").Filter(new() { HasTextRegex = optionRe });
+        var page = ctx.Page;
         var btnText = (await btn.InnerTextAsync()).Trim();
+        // The menu next to the button first (its dropdown), then any other open menu.
+        var scopes = new[]
+        {
+            btn.Locator("xpath=ancestor::*[contains(@class,'btn-group') or contains(@class,'dropdown')][1]"),
+            page.Locator(OpenMenus),
+        };
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < 5000)
         {
-            var n = await candidates.CountAsync();
-            for (var i = 0; i < n; i++)
+            foreach (var pattern in optionRes)
             {
-                var c = candidates.Nth(i);
-                try
+                foreach (var scope in scopes)
                 {
-                    if (await c.IsVisibleAsync() && !string.Equals((await c.InnerTextAsync()).Trim(), btnText, StringComparison.OrdinalIgnoreCase))
+                    var items = scope.Locator(MenuItems).Filter(new() { HasTextRegex = pattern });
+                    var n = await items.CountAsync();
+                    for (var i = 0; i < n; i++)
                     {
-                        await c.ClickAsync();
-                        return;
+                        var item = items.Nth(i);
+                        try
+                        {
+                            var text = (await item.InnerTextAsync()).Trim();
+                            if (await item.IsVisibleAsync() && !string.Equals(text, btnText, StringComparison.OrdinalIgnoreCase))
+                            {
+                                await item.ClickAsync();
+                                ctx.Log($"  chose '{text}'");
+                                return;
+                            }
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // element went away between count and click; retry
+                        }
                     }
                 }
-                catch (PlaywrightException)
-                {
-                    // element went away between count and click; retry
-                }
             }
-            await ctx.Page.WaitForTimeoutAsync(250);
+            await page.WaitForTimeoutAsync(250);
         }
         ctx.Log("  (no file-type menu appeared; assuming the button downloads directly)");
     }
