@@ -18,7 +18,7 @@
 
 vars:
   kpi: Topology Stock
-  page: /app/bi/topologyStock
+  page: topologyStock                  # trang: /app/<mã quốc gia>/topologyStock
 
 scenarios:
   - name: ${market.code}_${kpi}_${level.name}_${tech.name}
@@ -34,8 +34,8 @@ scenarios:
         - {name: 3G, technology: UMTS}
         - {name: 2G, technology: GSM}
     steps:
-      - select_country: ${market.country}                     # chọn quốc gia của thị trường
-      - open_menu: ${page}
+      - open_menu: /app/${market.country}/${page}            # mã quốc gia nằm trong URL (vd /app/kh/...)
+      - select_country: ${market.country}                     # kiểm tra / chọn đúng quốc gia
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - select_filter: {label: "Technology", options: ["${tech.technology}"]}
       - choose_view: ${level.view}                              # Macro data / By provinces

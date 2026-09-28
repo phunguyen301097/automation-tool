@@ -1045,6 +1045,8 @@ public static class Steps
         if (a.GetValueOrDefault("format_select") is Dictionary<string, object?> fs)
             await SetSelectValuesAsync(ctx, fs.Get("selector")!, new() { fs.Get("option")! }, true, null);
 
+        await CheckCountryAsync(ctx);
+
         var scope = page.Locator(a.Get("container") ?? ctx.Sel.TableContainer).First;
         var btn = scope.Locator("button, a, [role=button]").Filter(new() { HasTextRegex = TextRegex(buttonText) }).First;
         if (await btn.CountAsync() == 0) // button may live in a toolbar outside the container
@@ -1084,6 +1086,16 @@ public static class Steps
         var rows = a.GetBool("verify", true) && !tableEmpty ? VerifyFile(target) : -1;
         if (rows >= 0) ctx.Log($"  verified: {rows} data rows");
         ctx.Downloads.Add(new DownloadInfo(target, size, suggested, rows));
+    }
+
+    /// <summary>Refuse to export if the dashboard no longer shows the country chosen by select_country.</summary>
+    private static async Task CheckCountryAsync(StepContext ctx)
+    {
+        if (!ctx.Vars.TryGetValue("country_code", out var want) || want is null) return;
+        var shown = await ctx.Page.EvaluateAsync<string?>(
+            "(sel) => { const el = document.querySelector(sel); return el ? el.value : null; }", ctx.Sel.CountrySelect);
+        if (shown is not null && shown != Args.Str(want))
+            throw new StepException($"Dashboard shows country '{shown}' but this scenario is for '{Args.Str(want)}': not exporting");
     }
 
     /// <summary>After clicking the download button, pick the file-type item if a menu/modal appears.</summary>

@@ -164,7 +164,7 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
             Assert.True(File.Exists(file), file);
             var data = ReadXlsx(file);
             Assert.Equal("kh", data["country"]);
-            Assert.Equal("/app/bi/latencyMobile", data["kpi"]);
+            Assert.Equal("/app/kh/latencyMobile", data["kpi"]); // the country is part of the URL
             Assert.Equal("2026-08-24..2026-09-23", data["date"]);
             Assert.Equal(net, data["carrier"]);
             Assert.Equal("4G", data["coverage"]);
@@ -612,8 +612,8 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
             scenarios:
               - name: haiti_5g
                 steps:
+                  - goto: /app/ht/coverage
                   - select_country: ht
-                  - goto: /app/bi/coverage
                   - set_date: {preset: Last month}
                   - select_filter: {id: coverage_filter, options: [5G_SA]}
                   - choose_view: macro
@@ -624,5 +624,27 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Assert.True(r.Ok, r.Error);
         Assert.Contains("table is empty", log);
         Assert.Equal("empty.xlsx", Path.GetFileName(r.Downloads[0].File));
+    }
+
+    [Fact]
+    public async Task Export_Refused_WhenCountryChanged()
+    {
+        // Guard: a page opened under another country's URL must not be exported under this market's name.
+        var results = await RunYamlAsync("""
+            scenarios:
+              - name: wrong_country
+                steps:
+                  - goto: /app/kh/coverage
+                  - select_country: kh
+                  - goto: /app/bi/coverage
+                  - set_date: {preset: Last month}
+                  - choose_view: macro
+                  - wait_for_table: {}
+                  - download_table: {format: xlsx}
+            """, Config());
+        var r = Assert.Single(results);
+        Assert.False(r.Ok);
+        Assert.Contains("shows country 'bi' but this scenario is for 'kh'", r.Error);
+        Assert.Empty(r.Downloads);
     }
 }

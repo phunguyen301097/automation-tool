@@ -163,8 +163,9 @@ steps:
 Tool chạy **từng trang (KPI) cho cả 8 thị trường** rồi mới sang trang khác (Coverage time của VTC, STL,
 ... NCM, rồi Signal strength của VTC...). Muốn chạy hết mọi trang của một nước rồi mới sang nước khác:
 `--order market` (hoặc `run_order: market` trong `config.yaml`). File lưu vào `downloads/<mã>/`.
-Khi đổi quốc gia dashboard tải lại trang; tool chờ trang tải lại xong và hiển thị đúng quốc gia rồi mới
-làm tiếp. Chạy một thị trường: `-k "VTC_*"`; một KPI của một thị trường:
+Mã quốc gia nằm trong địa chỉ trang (`/app/kh/coverage` là Cambodia, `/app/bi/coverage` là Burundi), nên
+mỗi kịch bản mở trang bằng `/app/<country>/<trang>` rồi kiểm tra ô quốc gia. Trước khi tải file, tool kiểm tra
+lại quốc gia đang hiển thị; nếu khác thị trường của kịch bản thì dừng kịch bản đó, không lưu file sai. Chạy một thị trường: `-k "VTC_*"`; một KPI của một thị trường:
 `run scenarios/latency.yaml -k "VTZ_*"`. Bỏ / thêm thị trường: sửa danh sách trong `config.yaml`.
 Nếu bảng không có dữ liệu (ví dụ thị trường chưa có 5G), sau 20 giây tool ghi cảnh báo
 `table is empty` và vẫn tải file.
