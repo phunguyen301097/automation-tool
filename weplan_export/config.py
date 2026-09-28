@@ -23,6 +23,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "storage_state": ".auth/state.json",
         # A URL containing one of these means the session expired.
         "login_url_markers": ["login", "signin", "auth"],
+        # Text of a page saying the account is blocked: the run stops at once (no retry).
+        "blocked_texts": ["temporarily suspended", "account has been suspended", "account is suspended",
+                          "account has been blocked", "account is blocked", "account has been disabled"],
         "username_env": "WEPLAN_USERNAME",
         "password_env": "WEPLAN_PASSWORD",
         "login_path": "/",
@@ -96,6 +99,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "close_texts": ["Close", "Got it", "OK", "Okay", "Dismiss", "Skip", "Later", "Not now",
                         "Understood", "Continue", "Cerrar", "Entendido", "Aceptar"],
     },
+    # Rest between exports so the dashboard is not hit continuously. A pause is a number of
+    # seconds, [min, max] (random in between) or "min-max"; 0 = no pause.
+    "throttle": {
+        "pause_between": 0,        # between two scenarios
+        "pause_after_market": 0,   # instead of pause_between when the next scenario is another market
+        "max_exports": 0,          # stop after this many files in one run (0 = no limit); --resume continues
+    },
     # Aliases for the visualization cards ("Select a visualization mode").
     "views": {
         "macro": "#byCountry",
@@ -115,6 +125,27 @@ def deep_merge(base: dict, override: dict | None) -> dict:
         else:
             out[k] = copy.deepcopy(v)
     return out
+
+
+def pause_range(value: Any) -> tuple[float, float]:
+    """30 -> (30, 30); [30, 60] or "30-60" -> (30, 60)."""
+    if value in (None, "", False):
+        return 0.0, 0.0
+    if isinstance(value, str):
+        parts = [x for x in re.split(r"\s*-\s*|\s*,\s*", value.strip()) if x]
+        try:
+            value = [float(x) for x in parts]
+        except ValueError:
+            raise ValueError(f"Invalid pause {value!r}: use seconds, [min, max] or \"min-max\"") from None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return 0.0, 0.0
+        lo, hi = float(value[0]), float(value[-1])
+    else:
+        lo = hi = float(value)
+    if lo < 0 or hi < lo:
+        raise ValueError(f"Invalid pause {value!r}: use seconds, [min, max] or \"min-max\"")
+    return lo, hi
 
 
 def load_config(path: str | Path | None) -> dict:

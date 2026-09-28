@@ -45,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--resume", nargs="?", const="latest", default=None, metavar="RUN",
                    help="skip scenarios already finished in the latest run (or in downloads/_runs/RUN) "
                         "and run the rest")
+    r.add_argument("--pause", metavar="SEC",
+                   help="rest between exports: seconds or min-max, e.g. 30-60 (config: throttle.pause_between)")
+    r.add_argument("--market-pause", metavar="SEC",
+                   help="rest after finishing a market, e.g. 300-600 (config: throttle.pause_after_market)")
+    r.add_argument("--max-exports", type=int, metavar="N",
+                   help="stop after N files; continue later with --resume (config: throttle.max_exports)")
     r.add_argument("--order", choices=["page", "market"], default=None,
                    help="page: each page for all markets, then the next page (default); "
                         "market: all pages of one market, then the next market")
@@ -72,6 +78,19 @@ def main(argv: list[str] | None = None) -> int:
             doc = (fn.__doc__ or "").strip().splitlines()
             print(f"{name:16} {doc[0] if doc else ''}")
         return 0
+
+    if args.cmd == "run":
+        from .config import pause_range
+        throttle = config.setdefault("throttle", {})
+        for opt, key in (("pause", "pause_between"), ("market_pause", "pause_after_market"),
+                         ("max_exports", "max_exports")):
+            if getattr(args, opt) is not None:
+                throttle[key] = getattr(args, opt)
+        try:
+            pause_range(throttle.get("pause_between"))
+            pause_range(throttle.get("pause_after_market"))
+        except ValueError as e:
+            sys.exit(str(e))
 
     scenarios = load_scenarios(_scenario_files(args.files), config.get("vars"))
     if (getattr(args, "order", None) or config.get("run_order", "page")) == "market":
@@ -106,6 +125,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"Running {len(scenarios)} scenario(s):")
+    t = config.get("throttle") or {}
+    if any(t.get(k) for k in ("pause_between", "pause_after_market", "max_exports")):
+        print(f"Throttle: pause {t.get('pause_between') or 0}s between exports, "
+              f"{t.get('pause_after_market') or 0}s after each market, "
+              f"max {t.get('max_exports') or 'unlimited'} file(s) this run")
     for s in scenarios:
         print(f"  - {s.name}")
     print()

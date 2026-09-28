@@ -32,6 +32,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if url.path == "/suspended":
+            body = (b"<html><body><h2>Account suspended</h2><p>Your account has been temporarily "
+                    b"suspended due to a violation of the platform's terms of use.</p></body></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if url.path == "/export":
             q = dict(parse_qsl(url.query))
             fmt = q.pop("format")
@@ -529,3 +538,124 @@ def test_resume_after_interruption(tmp_path, server, capsys, monkeypatch):
 
     assert main(["-c", str(cfg), "run", str(sc), "--resume"]) == 0
     assert "Nothing left to run." in capsys.readouterr().out
+
+
+def _market_scenarios(codes):
+    return {"scenarios": [{"name": "${market.code}_${kpi}",
+                           "matrix": {"market": [{"code": c} for c in codes], "kpi": ["a", "b"]},
+                           "steps": [{"goto": "/app/bi/coverage"}]}]}
+
+
+def test_pause_between_exports_and_after_each_market(tmp_path, config, capsys):
+    config["throttle"].update(pause_between=0.2, pause_after_market=[0.6, 0.7])
+    t0 = time.time()
+    f = tmp_path / "s.yaml"
+    f.write_text(yaml.safe_dump(_market_scenarios(["VTC", "STL"]), sort_keys=False), encoding="utf-8")
+    results = run_scenarios(load_scenarios([f]), config)  # VTC_a, VTC_b, STL_a, STL_b
+    assert [r.status for r in results] == ["PASS"] * 4
+    out = capsys.readouterr().out
+    assert out.count("Rest between exports: pausing") == 2
+    assert out.count("Market VTC done, next STL: pausing") == 1
+    assert time.time() - t0 >= 0.2 * 2 + 0.6
+
+
+def _kill_browser_later(seconds):
+    """Kill this test's Chromium processes (children of the Playwright driver) like a user closing it."""
+    import os
+    import signal
+    parents = {}
+    for d in Path("/proc").iterdir():
+        if d.name.isdigit():
+            try:
+                parents[int(d.name)] = int((d / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, IndexError, ValueError):
+                pass
+
+    def descends(pid):
+        while pid in parents and pid > 1:
+            pid = parents[pid]
+            if pid == os.getpid():
+                return True
+        return False
+
+    victims = [pid for pid in parents if descends(pid) and "chrom" in Path(f"/proc/{pid}/comm").read_text()]
+    assert victims
+
+    def kill():
+        for pid in victims:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    threading.Timer(seconds, kill).start()
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs /proc")
+def test_closing_the_browser_during_a_pause_stops_the_run(tmp_path, config, monkeypatch):
+    from weplan_export import actions
+    config["throttle"]["pause_between"] = 30
+    monkeypatch.setitem(actions.STEPS, "close_soon", lambda ctx, args: _kill_browser_later(1))
+    doc = {"scenarios": [
+        {"name": "a", "steps": [{"goto": "/app/bi/coverage"}, {"close_soon": None}]},
+        {"name": "b", "steps": [{"goto": "/app/bi/coverage"}]},
+    ]}
+    t0 = time.time()
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["PASS", "NOT RUN"]
+    assert time.time() - t0 < 20
+
+
+def test_max_exports_stops_the_run_for_resume(tmp_path, config, capsys):
+    config["throttle"]["max_exports"] = 2
+    doc = {"scenarios": [{"name": "exp_${n}", "matrix": {"n": [1, 2, 3]}, "steps": [
+        {"goto": "/app/bi/coverage"},
+        {"set_date": {"preset": "Last month"}},
+        {"choose_view": "macro"},
+        {"wait_for_table": {}},
+        {"download_table": {"format": "csv", "filename": "f_${n}"}},
+    ]}]}
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["PASS", "PASS", "NOT RUN"]
+    out = capsys.readouterr().out
+    assert "reached throttle.max_exports (2 files)" in out and "--resume" in out
+
+
+def test_suspended_account_stops_the_whole_run(tmp_path, config, capsys):
+    doc = {"scenarios": [
+        {"name": "a", "steps": [{"goto": "/app/bi/coverage"}]},
+        {"name": "b", "steps": [{"goto": "/suspended"}, {"choose_view": "macro"}]},
+        {"name": "c", "steps": [{"goto": "/app/bi/coverage"}]},
+    ]}
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["PASS", "STOPPED", "NOT RUN"]
+    assert "temporarily suspended" in results[1].error
+    assert results[1].failed_step == "2. choose_view"
+    assert results[1].artifacts  # screenshot of the notice
+    assert "Stopping the whole run" in capsys.readouterr().out
+
+
+def test_suspended_at_start_does_not_retry_login(tmp_path, config, monkeypatch):
+    from weplan_export import runner
+    config["auth"]["required"] = True
+    config["start_path"] = "/suspended"
+    calls = []
+    monkeypatch.setattr(runner, "auto_login", lambda page, cfg: calls.append(1) or False)
+    doc = {"scenarios": [{"name": n, "steps": [{"goto": "/app/bi/coverage"}]} for n in "abc"]}
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["STOPPED", "NOT RUN", "NOT RUN"]
+    assert "temporarily suspended" in results[0].error
+    assert not calls
+
+
+def test_not_logged_in_stops_instead_of_retrying(tmp_path, config, monkeypatch):
+    from weplan_export import runner
+    config["auth"]["required"] = True
+    config["selectors"]["logged_in_marker"] = "#never-there"
+    calls = []
+    monkeypatch.setattr(runner, "auto_login", lambda page, cfg: calls.append(1) or False)
+    doc = {"scenarios": [{"name": n, "steps": [{"goto": "/app/bi/coverage"}]} for n in "abc"]}
+    results = _run(tmp_path, config, doc)
+    assert [r.status for r in results] == ["STOPPED", "NOT RUN", "NOT RUN"]
+    assert "Not logged in" in results[0].error
+    assert len(calls) == 1

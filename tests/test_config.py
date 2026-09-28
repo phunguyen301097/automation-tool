@@ -1,5 +1,6 @@
 import datetime as dt
 
+import pytest
 import yaml
 
 from weplan_export.actions import parse_date
@@ -107,3 +108,16 @@ def test_default_order_is_page_then_market(tmp_path):
     names = [s.name for s in load_scenarios(files, {"markets": markets})]
     assert names == ["VTC_coverage_Net", "VTC_coverage_Province", "VTB_coverage_Net", "VTB_coverage_Province",
                      "VTC_sample_Net", "VTC_sample_Province", "VTB_sample_Net", "VTB_sample_Province"]
+
+
+def test_pause_range_formats():
+    from weplan_export.config import load_config, pause_range
+    assert pause_range(30) == (30, 30)
+    assert pause_range([30, 60]) == (30, 60)
+    assert pause_range("30-60") == (30, 60)
+    assert pause_range(0) == (0, 0) and pause_range(None) == (0, 0)
+    for bad in ("abc", [60, 30], -1):
+        with pytest.raises(ValueError):
+            pause_range(bad)
+    t = load_config(None)["throttle"]
+    assert (t["pause_between"], t["pause_after_market"], t["max_exports"]) == (0, 0, 0)

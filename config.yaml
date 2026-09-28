@@ -4,8 +4,8 @@
 base_url: https://dashboard.weplananalytics.com
 start_path: /app/bi/coverage
 output_dir: downloads            # nơi lưu file tải về
-run_order: page                  # page: xong 1 trang cho cả 8 nước rồi sang trang khác
-                                 # market: xong mọi trang của 1 nước rồi sang nước khác
+run_order: market                # market: xong mọi trang của 1 nước rồi sang nước khác (nghỉ sau mỗi nước)
+                                 # page: xong 1 trang cho cả 8 nước rồi sang trang khác
 
 # Biến dùng chung cho mọi file kịch bản.
 vars:
@@ -45,6 +45,12 @@ date:
   mode: auto
   input_format: "%d-%m-%Y"       # dashboard hiển thị 01-09-2026 - 25-09-2026
   range_separator: " - "
+
+throttle:
+  # Nghỉ giữa các lần xuất (giây). Ghi 1 số, [min, max] (ngẫu nhiên trong khoảng) hoặc 0 để tắt.
+  pause_between: [30, 60]        # nghỉ giữa 2 kịch bản (2 lần xuất)
+  pause_after_market: [300, 600] # xong 1 thị trường thì nghỉ 5-10 phút (dùng cùng run_order: market)
+  max_exports: 0                 # xuất đủ N file thì dừng, hôm sau chạy lại với --resume (0 = không giới hạn)
 
 popups:
   auto_dismiss: true             # tự đóng popup thông báo (What's New...) chặn trang

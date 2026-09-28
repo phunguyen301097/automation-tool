@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import random
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -12,7 +13,7 @@ from pathlib import Path
 from playwright.sync_api import Browser, BrowserContext, Playwright, sync_playwright
 
 from .actions import STEPS, Context, StepError, _safe, dismiss_popups, install_popup_handler
-from .config import Scenario
+from .config import Scenario, pause_range
 
 
 @dataclass
@@ -205,12 +206,61 @@ def inspect_page(config: dict, headed: bool = False, view: str = "macro") -> Pat
     return out
 
 
+class AccountBlocked(Exception):
+    """The dashboard shows a suspension notice or the login page: stop the whole run."""
+
+
+def blocked_reason(page, config: dict, check_login: bool = True) -> str | None:
+    """Why the dashboard can no longer be used (account suspended / logged out), or None."""
+    try:
+        if page is None or page.is_closed():
+            return None
+        texts = [t.lower() for t in config["auth"].get("blocked_texts") or []]
+        hit = page.evaluate(
+            "(texts) => { const t = (document.body && document.body.innerText || '').toLowerCase();"
+            " return texts.find(x => t.includes(x)) || null; }", texts) if texts else None
+        if hit:
+            return f"the dashboard says the account is blocked ('{hit}')"
+        url = page.url.lower()
+        if check_login and config["auth"].get("required", True) and \
+                any(m in url for m in config["auth"]["login_url_markers"]):
+            return f"the dashboard went to the login page ({page.url})"
+    except Exception:
+        return None
+    return None
+
+
+def _market_code(sc: Scenario) -> str | None:
+    m = sc.vars.get("market")
+    return m.get("code") if isinstance(m, dict) else m
+
+
+def _pause(seconds: float, why: str, state: "_RunState", page) -> None:
+    """Sleep in small chunks so closing the browser or Ctrl+C still stops the run at once."""
+    if seconds <= 0:
+        return
+    until = dt.datetime.now() + dt.timedelta(seconds=seconds)
+    mins, secs = divmod(int(round(seconds)), 60)
+    log(f"{why}: pausing {f'{mins}m ' if mins else ''}{secs}s (until {until:%H:%M:%S})")
+    end = time.time() + seconds
+    while not state.stop_reason and (left := end - time.time()) > 0:
+        chunk = min(1.0, left)
+        try:
+            if page is not None and not page.is_closed():
+                page.wait_for_timeout(chunk * 1000)  # lets Playwright notice a closed window
+            else:
+                time.sleep(chunk)
+        except Exception:
+            time.sleep(0.1)
+
+
 class _RunState:
     """Tracks whether the user closed the browser / pressed Ctrl+C, to stop the whole run."""
 
     def __init__(self):
         self.stop_reason: str | None = None
         self.closing = False  # True while the tool itself closes pages/contexts
+        self.graceful = False  # stopped on purpose (export limit): keep the session
 
     def watch_page(self, page) -> None:
         page.on("close", lambda _: self._closed("the browser window was closed"))
@@ -273,11 +323,28 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
             install_popup_handler(page, config, log)
         session_checked = False
         previous_failed = False
+        previous: Scenario | None = None
+        throttle = config.get("throttle") or {}
+        between = pause_range(throttle.get("pause_between"))
+        after_market = pause_range(throttle.get("pause_after_market"))
+        max_exports = int(throttle.get("max_exports") or 0)
+        exported = 0
 
         for idx, sc in enumerate(scenarios, 1):
+            if not state.stop_reason and max_exports and exported >= max_exports:
+                state.stop_reason = (f"reached throttle.max_exports ({max_exports} files); "
+                                     "continue later with --resume")
+                state.graceful = True
+            if not state.stop_reason and previous is not None:
+                prev_m, cur_m = _market_code(previous), _market_code(sc)
+                if prev_m and cur_m and prev_m != cur_m and after_market[1] > 0:
+                    _pause(random.uniform(*after_market), f"Market {prev_m} done, next {cur_m}", state, page)
+                elif between[1] > 0:
+                    _pause(random.uniform(*between), "Rest between exports", state, page)
             if state.stop_reason:
                 results.append(Result(scenario=sc.name, ok=False, seconds=0, status="NOT RUN"))
                 continue
+            previous = sc
             log(f"=== [{idx}/{len(scenarios)}] {sc.name}")
             if isolated:
                 ctx = new_context(browser, config)
@@ -311,6 +378,9 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                     if fn is None:
                         raise StepError(f"Unknown step '{name}'. Available: {sorted(STEPS)}")
                     log(f"- {current}")
+                    reason = blocked_reason(page, config)
+                    if reason:
+                        raise AccountBlocked(reason)
                     if config["popups"].get("auto_dismiss", True) and name not in ("dismiss_popups", "close_popups"):
                         dismiss_popups(page, config, log)
                     fn(sctx, args)
@@ -323,6 +393,14 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                 res.failed_step = current
             except Exception as e:
                 res.failed_step = current
+                if not state.stop_reason:
+                    # A step that timed out because the account got blocked meanwhile.
+                    reason = str(e) if isinstance(e, AccountBlocked) else blocked_reason(page, config)
+                    if reason:
+                        state.stop_reason = reason
+                        log(f"!! {reason}. Stopping the whole run: do not retry until the account works "
+                            "again in a normal browser, then continue with --resume.")
+                        _save_evidence(page, artifacts_dir, sc.name, res)
                 if state.stop_reason:
                     res.status = "STOPPED"
                     res.error = f"Stopped: {state.stop_reason}"
@@ -332,14 +410,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                     log(f"FAILED at step {current}: {res.error}")
                     if not isinstance(e, StepError):
                         traceback.print_exc()
-                    artifacts_dir.mkdir(parents=True, exist_ok=True)
-                    base = artifacts_dir / _safe(sc.name)
-                    try:
-                        page.screenshot(path=f"{base}.png", full_page=True)
-                        Path(f"{base}.html").write_text(page.content(), encoding="utf-8")
-                        res.artifacts += [f"{base}.png", f"{base}.html"]
-                    except Exception:
-                        pass
+                    _save_evidence(page, artifacts_dir, sc.name, res)
             finally:
                 res.seconds = round(time.time() - t0, 1)
                 res.downloads = sctx.downloads
@@ -357,6 +428,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                         ctx.close()
                         state.closing = False
             results.append(res)
+            exported += len(res.downloads)
             save_progress()
             previous_failed = not res.ok
             if state.stop_reason:
@@ -370,7 +442,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
         log(f"Stopping: {state.stop_reason}")
     finally:
         # Keep the refreshed session (cookies, "announcement seen" flags) for the next run.
-        if not isolated and page is not None and not state.stop_reason:
+        if not isolated and page is not None and (not state.stop_reason or state.graceful):
             _save_session(page, config)
         done = {r.scenario for r in results}
         results += [Result(scenario=s.name, ok=False, seconds=0, status="NOT RUN")
@@ -386,6 +458,17 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
     return results
 
 
+def _save_evidence(page, artifacts_dir: Path, name: str, res: Result) -> None:
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    base = artifacts_dir / _safe(name)
+    try:
+        page.screenshot(path=f"{base}.png", full_page=True)
+        Path(f"{base}.html").write_text(page.content(), encoding="utf-8")
+        res.artifacts += [f"{base}.png", f"{base}.html"]
+    except Exception:
+        pass
+
+
 def _save_session(page, config: dict) -> None:
     if not config["auth"].get("required", True):
         return
@@ -398,12 +481,19 @@ def _save_session(page, config: dict) -> None:
 
 def _ensure_session(page, config: dict) -> None:
     page.goto(config["base_url"].rstrip("/") + config["start_path"], wait_until="domcontentloaded")
+    reason = blocked_reason(page, config, check_login=False)
+    if reason:
+        raise AccountBlocked(reason)
     if is_logged_in(page, config):
         return
     if auto_login(page, config):
+        reason = blocked_reason(page, config, check_login=False)
+        if reason:
+            raise AccountBlocked(reason)
         return
-    raise StepError("Not logged in. Run `python -m weplan_export login` first "
-                    f"(or set {config['auth']['username_env']}/{config['auth']['password_env']}).")
+    # Not logged in: stop instead of trying again for every scenario.
+    raise AccountBlocked("Not logged in. Run `python -m weplan_export login` first "
+                         f"(or set {config['auth']['username_env']}/{config['auth']['password_env']}).")
 
 
 def _write_report_json(results: list[Result], artifacts_dir: Path) -> None:
