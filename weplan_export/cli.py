@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--isolated", action="store_true",
                    help="fresh browser context per scenario (default: all scenarios share one page)")
     r.add_argument("--dry-run", action="store_true", help="only print the expanded scenarios")
+    r.add_argument("--order", choices=["page", "market"], default=None,
+                   help="page: each page for all markets, then the next page (default); "
+                        "market: all pages of one market, then the next market")
 
     ls = sub.add_parser("list", help="list scenarios")
     ls.add_argument("files", nargs="*")
@@ -68,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     scenarios = load_scenarios(_scenario_files(args.files), config.get("vars"))
-    scenarios = order_by_market(scenarios, (config.get("vars") or {}).get("markets"))
+    if (getattr(args, "order", None) or config.get("run_order", "page")) == "market":
+        scenarios = order_by_market(scenarios, (config.get("vars") or {}).get("markets"))
 
     if args.cmd == "list":
         for s in scenarios:

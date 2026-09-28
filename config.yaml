@@ -4,6 +4,8 @@
 base_url: https://dashboard.weplananalytics.com
 start_path: /app/bi/coverage
 output_dir: downloads            # nơi lưu file tải về
+run_order: page                  # page: xong 1 trang cho cả 8 nước rồi sang trang khác
+                                 # market: xong mọi trang của 1 nước rồi sang nước khác
 
 # Biến dùng chung cho mọi file kịch bản.
 vars:

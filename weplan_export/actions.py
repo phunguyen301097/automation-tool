@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from playwright.sync_api import Page, TimeoutError as PWTimeout
+from playwright.sync_api import Error as PWError, Page, TimeoutError as PWTimeout
 
 
 class StepError(Exception):
@@ -311,14 +311,50 @@ def select_country(ctx: Context, args: Any) -> None:
         ctx.log(f"  country already {info['label']}")
         return
     ctx.log(f"  country -> {info['label']}")
-    url_before = page.url
-    _set_select_values(ctx, sel, [info["match"]])
-    # Switching country usually reloads the dashboard.
+    t0 = time.time()
+    # Mark the current document: after the dashboard reloads, the mark is gone.
+    page.evaluate("() => { window.__weplanCountryMark = true; }")
     try:
-        page.wait_for_url(lambda u: u != url_before, timeout=10_000)
-    except PWTimeout:
+        _set_select_values(ctx, sel, [info["match"]])
+    except PWError:
+        pass  # the reload may interrupt the script that changed the value
+    _wait_country_applied(ctx, sel, info["match"])
+    ctx.log(f"  country is {info['label']} ({time.time() - t0:.1f}s)")
+
+
+_COUNTRY_STATE_JS = """(sel) => {
+    const el = document.querySelector(sel);
+    return {reloaded: !window.__weplanCountryMark, value: el ? el.value : null, ready: document.readyState};
+}"""
+
+
+def _wait_country_applied(ctx: Context, sel: str, code: str, no_reload_ms: int = 15_000) -> None:
+    """Wait until the page reloaded after a country switch and shows the new country.
+
+    The dashboard may navigate more than once (an aborted request, then a reload): navigation
+    errors (net::ERR_ABORTED, frame detached, context destroyed) are expected meanwhile.
+    """
+    page = ctx.page
+    t0 = time.time()
+    deadline = t0 + ctx.timeouts["navigation"] / 1000
+    while True:
+        try:
+            state = page.evaluate(_COUNTRY_STATE_JS, sel)
+        except PWError:
+            state = None  # navigating
+        if state and state["ready"] == "complete" and state["value"] == code:
+            if state["reloaded"] or time.time() - t0 > no_reload_ms / 1000:
+                break
+        if time.time() > deadline:
+            raise StepError(f"Country did not switch to '{code}' (page state: {state})")
+        try:
+            page.wait_for_timeout(300)
+        except PWError:
+            pass
+    try:
+        _wait_page_ready(ctx)
+    except PWError:
         pass
-    _wait_page_ready(ctx)
 
 
 # --------------------------------------------------------------------------- filters

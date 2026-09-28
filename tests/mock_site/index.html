@@ -138,8 +138,12 @@ setTimeout(() => {
 document.querySelectorAll('a.has-arrow').forEach(a => a.addEventListener('click', e => {
   e.preventDefault(); a.nextElementSibling.classList.toggle('mm-show');
 }));
+// Like the dashboard: switching country calls an endpoint (its navigation is aborted:
+// net::ERR_ABORTED), then reloads the same page.
 $('#dropdownCountryChooser').addEventListener('change', e => {
-  location.href = location.pathname + '?country=' + e.target.value;
+  sessionStorage.setItem('country', e.target.value);
+  location.href = '/switch-country?country=' + e.target.value;   // 204 -> ERR_ABORTED
+  setTimeout(() => location.reload(), 600);
 });
 
 let dateRange = null;

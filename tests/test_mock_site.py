@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
@@ -24,6 +25,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if url.path == "/switch-country":
+            # Like the dashboard's country switch: an endpoint answering 204 (the navigation
+            # to it is aborted: net::ERR_ABORTED), then the page reloads itself.
+            time.sleep(0.3)
+            self.send_response(204)
+            self.end_headers()
+            return
         if url.path == "/export":
             q = dict(parse_qsl(url.query))
             fmt = q.pop("format")

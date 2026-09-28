@@ -13,6 +13,9 @@ import yaml
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "base_url": "https://dashboard.weplananalytics.com",
+    # page:   one page (KPI file) for every market, then the next page (file order).
+    # market: every page for one market, then the next market.
+    "run_order": "page",
     "start_path": "/app/bi/coverage",
     "output_dir": "downloads",
     "auth": {

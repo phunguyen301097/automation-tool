@@ -92,3 +92,18 @@ def test_exclude_filter(tmp_path):
         ["VTB_Coverage time", "VTC_Coverage time", "VTC_Sample"]
     assert [s.name for s in filter_scenarios(sc, ["VTC_*"], None, ["*_Sample"])] == ["VTC_Coverage time"]
     assert [s.name for s in filter_scenarios(sc, None, None, ["VTB_*", "*_Sample"])] == ["VTC_Coverage time"]
+
+
+def test_default_order_is_page_then_market(tmp_path):
+    """Load order = file (page) by file, all markets of a page before the next page."""
+    markets = [{"code": "VTC", "country": "kh"}, {"code": "VTB", "country": "bi"}]
+    files = []
+    for kpi in ("coverage", "sample"):
+        f = tmp_path / f"{kpi}.yaml"
+        f.write_text(yaml.safe_dump({"scenarios": [
+            {"name": "${market.code}_" + kpi + "_${lvl}", "matrix": {"market": "${markets}", "lvl": ["Net", "Province"]},
+             "steps": []}]}, sort_keys=False))
+        files.append(f)
+    names = [s.name for s in load_scenarios(files, {"markets": markets})]
+    assert names == ["VTC_coverage_Net", "VTC_coverage_Province", "VTB_coverage_Net", "VTB_coverage_Province",
+                     "VTC_sample_Net", "VTC_sample_Province", "VTB_sample_Net", "VTB_sample_Province"]
