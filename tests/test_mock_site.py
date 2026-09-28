@@ -390,3 +390,36 @@ def test_coverage_time_monthly_scenarios(config):
             assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
             assert data["coverage"] == coverage
             assert data["view"] == view
+
+
+PAGE_SCENARIOS = {
+    # file: (KPI in file name, page path, has Coverage type split)
+    "network_availability.yaml": ("Network availability", "/app/bi/networkAvailabilityMobile", True),
+    "sample.yaml": ("Sample", "/app/bi/sample", False),
+    "speed_test_throughput.yaml": ("Speed test Throughput", "/app/bi/speedTestThruMobile", True),
+    "web_performance_times.yaml": ("Web performance times", "/app/bi/webPerformanceTimesMobile", True),
+    "video_streaming_times.yaml": ("Video Streaming times", "/app/bi/youtubeTimesMobile", True),
+}
+
+
+@pytest.mark.parametrize("file_name", sorted(PAGE_SCENARIOS))
+def test_monthly_page_scenarios(config, file_name):
+    import datetime as dt
+    kpi, path, split = PAGE_SCENARIOS[file_name]
+    scenario_file = Path(__file__).parent.parent / "scenarios" / file_name
+    results = run_scenarios(load_scenarios([scenario_file]), config)
+    techs = ["All", "5G", "4G"] if split else ["All"]
+    assert [r.status for r in results] == ["PASS"] * 2 * len(techs), [r.error for r in results]
+
+    last = dt.date.today().replace(day=1) - dt.timedelta(days=1)
+    out = Path(config["output_dir"])
+    for level, view in (("Net", "byCountry"), ("Province", "byRegions")):
+        for tech in techs:
+            f = out / f"VTB_{last.year}_T{last.month}_{kpi}_{level}_{tech}.xlsx"
+            assert f.exists(), f
+            data = _xlsx_dict(f)
+            assert data["kpi"] == path
+            assert data["view"] == view
+            assert data["carrier"] == "ECONET|LUMITEL|ONAMOB|SMART"
+            if tech == "4G":
+                assert data["coverage"] == "4G"

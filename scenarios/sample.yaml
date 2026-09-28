@@ -1,0 +1,39 @@
+# Sample: xuất bảng Excel hàng tháng (cùng quy trình với Coverage time).
+#
+#   Lần 1 - mức toàn mạng (Net):   Macro data
+#   Lần 2 - mức tỉnh (Province):   By provinces
+#   Trang này KHÔNG có filter Coverage type -> chỉ xuất mức All  ->  2 file:
+#
+#     VTB_2026_T8_Sample_Net_All        VTB_2026_T8_Sample_Province_All
+#
+# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
+#
+# Trang Sample không có filter Coverage type nên không tách được All / 5G / 4G.
+#
+# Chạy:  python -m weplan_export run scenarios/sample.yaml
+
+vars:
+  market: VTB
+  country: Burundi
+  kpi: Sample                 # phần "Loại KPI" trong tên file
+  page: /app/bi/sample
+
+scenarios:
+  - name: ${market}_${kpi}_${level.name}_${tech.name}
+    tags: [sample, monthly]
+    matrix:
+      level:                               # Bước 4
+        - {name: Net, view: macro}         #   Macro data
+        - {name: Province, view: admin_1}  #   By provinces
+      tech:
+        - {name: All}
+    steps:
+      - open_menu: ${page}
+      - select_country: ${country}
+      - set_date: {preset: Last month}                          # Bước 1
+      - select_filter: {id: carrier_filter, all: true}          # Bước 2: Cellular network -> Select all
+      - choose_view: ${level.view}                              # Bước 4
+      - wait_for_table: {}
+      - download_table:                                         # Bước 5, 6, 7: Download table -> As XLSX
+          format: xlsx
+          filename: "${market}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"

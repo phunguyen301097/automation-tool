@@ -1,0 +1,49 @@
+# Network availability - Mobile (Cellular): xuất bảng Excel hàng tháng (cùng quy trình với Coverage time).
+#
+#   Lần 1 - mức toàn mạng (Net):   Macro data
+#   Lần 2 - mức tỉnh (Province):   By provinces
+#   Mỗi mức 3 công nghệ: All, 5G, 4G  ->  6 file:
+#
+#     VTB_2026_T8_Network availability_Net_All        VTB_2026_T8_Network availability_Province_All
+#     VTB_2026_T8_Network availability_Net_5G         VTB_2026_T8_Network availability_Province_5G
+#     VTB_2026_T8_Network availability_Net_4G         VTB_2026_T8_Network availability_Province_4G
+#
+# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
+#
+# Trang này còn filter "Network availability" (Service available / unavailable) và "Subdomains":
+# giữ nguyên như dashboard đang chọn. Muốn cố định thì bỏ dấu # ở bước tương ứng bên dưới.
+#
+# Chạy:  python -m weplan_export run scenarios/network_availability.yaml
+
+vars:
+  market: VTB
+  country: Burundi
+  kpi: Network availability                 # phần "Loại KPI" trong tên file
+  page: /app/bi/networkAvailabilityMobile
+
+scenarios:
+  - name: ${market}_${kpi}_${level.name}_${tech.name}
+    tags: [network_availability, monthly]
+    matrix:
+      level:                               # Bước 4
+        - {name: Net, view: macro}         #   Macro data
+        - {name: Province, view: admin_1}  #   By provinces
+      tech:                                # Bước 3: Coverage type
+        - name: All
+          coverage: [5G_SA, 5G_NSA_CONNECTED, 5G_NSA_NOT_RESTRICTED, 5G_NSA_RESTRICTED, 4G, 3G, 2G]
+        - name: 5G
+          coverage: [5G_SA, 5G_NSA_CONNECTED, 5G_NSA_NOT_RESTRICTED, 5G_NSA_RESTRICTED]
+        - name: 4G
+          coverage: [4G]
+    steps:
+      - open_menu: ${page}
+      - select_country: ${country}
+      - set_date: {preset: Last month}                          # Bước 1
+      - select_filter: {id: carrier_filter, all: true}          # Bước 2: Cellular network -> Select all
+      - select_filter: {id: coverage_filter, options: "${tech.coverage}"}   # Bước 3
+      # - select_filter: {id: network_availability_filter, options: ["Service available", "Service unavailable"]}
+      - choose_view: ${level.view}                              # Bước 4
+      - wait_for_table: {}
+      - download_table:                                         # Bước 5, 6, 7: Download table -> As XLSX
+          format: xlsx
+          filename: "${market}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"
