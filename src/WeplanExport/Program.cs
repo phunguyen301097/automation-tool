@@ -18,6 +18,8 @@ Commands:
       --trace                   record a Playwright trace per scenario
       -x, --stop-on-fail        stop at the first failed scenario
       --isolated                fresh browser context per scenario (default: one shared page)
+      --order page|market       page: each page for all markets, then the next page (default);
+                                market: all pages of one market, then the next market
       --dry-run                 only print the expanded scenarios
   list [files...]               list scenarios
   steps                         list available step types
@@ -44,6 +46,7 @@ var tags = new List<string>();
 bool headed = false, trace = false, stopOnFail = false, dryRun = false, isolated = false;
 int? slowMo = null;
 var view = "macro";
+string? order = null;
 for (var i = 1; i < rest.Count; i++)
 {
     switch (rest[i])
@@ -58,6 +61,7 @@ for (var i = 1; i < rest.Count; i++)
         case "--dry-run": dryRun = true; break;
         case "--isolated": isolated = true; break;
         case "--view": view = rest[++i]; break;
+        case "--order": order = rest[++i]; break;
         default: files.Add(rest[i]); break;
     }
 }
@@ -130,8 +134,13 @@ catch (StepException e)
     return 1;
 }
 
-List<Scenario> LoadOrdered() =>
-    ScenarioLoader.OrderByMarket(ScenarioLoader.Load(ScenarioFiles(files), config.Vars), config.Vars.GetValueOrDefault("markets"));
+List<Scenario> LoadOrdered()
+{
+    var loaded = ScenarioLoader.Load(ScenarioFiles(files), config.Vars);
+    return (order ?? config.RunOrder) == "market"
+        ? ScenarioLoader.OrderByMarket(loaded, config.Vars.GetValueOrDefault("markets"))
+        : loaded;
+}
 
 static List<string> ScenarioFiles(List<string> patterns)
 {

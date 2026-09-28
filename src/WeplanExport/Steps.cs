@@ -324,17 +324,66 @@ public static class Steps
             return;
         }
         ctx.Log($"  country -> {label}");
-        var urlBefore = page.Url;
-        await SetSelectValuesAsync(ctx, sel, new() { match }, clear: true, waitOptionsMs: null);
-        // Switching country usually reloads the dashboard.
+        var sw = Stopwatch.StartNew();
+        // Mark the current document: after the dashboard reloads, the mark is gone.
+        await page.EvaluateAsync("() => { window.__weplanCountryMark = true; }");
         try
         {
-            await page.WaitForURLAsync(u => u != urlBefore, new() { Timeout = 10_000 });
+            await SetSelectValuesAsync(ctx, sel, new() { match }, clear: true, waitOptionsMs: null);
         }
-        catch (TimeoutException)
+        catch (PlaywrightException)
+        {
+            // the reload may interrupt the script that changed the value
+        }
+        await WaitCountryAppliedAsync(ctx, sel, match!);
+        ctx.Log($"  country is {label} ({sw.Elapsed.TotalSeconds:0.0}s)");
+    }
+
+    private const string CountryStateJs = @"(sel) => {
+        const el = document.querySelector(sel);
+        return {reloaded: !window.__weplanCountryMark, value: el ? el.value : null, ready: document.readyState};
+    }";
+
+    /// <summary>
+    /// Wait until the page reloaded after a country switch and shows the new country. The dashboard may
+    /// navigate more than once (an aborted request, then a reload): navigation errors are expected meanwhile.
+    /// </summary>
+    private static async Task WaitCountryAppliedAsync(StepContext ctx, string sel, string code, int noReloadMs = 15_000)
+    {
+        var page = ctx.Page;
+        var sw = Stopwatch.StartNew();
+        JsonElement? state = null;
+        while (true)
+        {
+            try
+            {
+                state = await page.EvaluateAsync<JsonElement>(CountryStateJs, sel);
+            }
+            catch (PlaywrightException)
+            {
+                state = null; // navigating
+            }
+            if (state is { } st && st.GetProperty("ready").GetString() == "complete"
+                                && st.GetProperty("value").GetString() == code
+                                && (st.GetProperty("reloaded").GetBoolean() || sw.ElapsedMilliseconds > noReloadMs))
+                break;
+            if (sw.ElapsedMilliseconds > ctx.Timeouts.Navigation)
+                throw new StepException($"Country did not switch to '{code}' (page state: {state})");
+            try
+            {
+                await page.WaitForTimeoutAsync(300);
+            }
+            catch (PlaywrightException)
+            {
+            }
+        }
+        try
+        {
+            await WaitPageReadyAsync(ctx);
+        }
+        catch (PlaywrightException)
         {
         }
-        await WaitPageReadyAsync(ctx);
     }
 
     // ------------------------------------------------------------------ filters

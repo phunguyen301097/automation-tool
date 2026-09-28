@@ -54,6 +54,14 @@ public sealed class MockServer : IDisposable
     private void Handle(HttpListenerContext c)
     {
         byte[] body;
+        if (c.Request.Url!.AbsolutePath == "/switch-country")
+        {
+            // Like the dashboard's country switch: an endpoint answering 204 (the navigation to it
+            // is aborted: net::ERR_ABORTED), then the page reloads itself.
+            Thread.Sleep(300);
+            c.Response.StatusCode = 204;
+            return;
+        }
         if (c.Request.Url!.AbsolutePath == "/export")
         {
             var q = c.Request.QueryString;

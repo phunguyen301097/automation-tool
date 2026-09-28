@@ -9,6 +9,11 @@ public class AppConfig
     public string BaseUrl { get; set; } = "https://dashboard.weplananalytics.com";
     public string StartPath { get; set; } = "/app/bi/coverage";
     public string OutputDir { get; set; } = "downloads";
+    /// <summary>
+    /// page: one page (KPI file) for every market, then the next page (file order).
+    /// market: every page for one market, then the next market.
+    /// </summary>
+    public string RunOrder { get; set; } = "page";
     public AuthConfig Auth { get; set; } = new();
     public BrowserConfig Browser { get; set; } = new();
     public TimeoutConfig Timeouts { get; set; } = new();

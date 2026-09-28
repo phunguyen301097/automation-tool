@@ -173,4 +173,35 @@ public class ConfigTests
         Assert.Equal(new[] { "VTC_Coverage time" },
             ScenarioLoader.Filter(sc, new() { "VTC_*" }, new(), new() { "*_Sample" }).Select(s => s.Name));
     }
+
+    [Fact]
+    public void DefaultOrder_IsPageThenMarket()
+    {
+        // Load order = file (page) by file, all markets of a page before the next page.
+        var dir = Directory.CreateTempSubdirectory("weplan-order").FullName;
+        var files = new List<string>();
+        foreach (var kpi in new[] { "coverage", "sample" })
+        {
+            var f = Path.Combine(dir, kpi + ".yaml");
+            File.WriteAllText(f, $$"""
+                scenarios:
+                  - name: ${market.code}_{{kpi}}_${lvl}
+                    matrix: {market: "${markets}", lvl: [Net, Province]}
+                    steps: []
+                """);
+            files.Add(f);
+        }
+        var markets = new List<object?>
+        {
+            new Dictionary<string, object?> { ["code"] = "VTC", ["country"] = "kh" },
+            new Dictionary<string, object?> { ["code"] = "VTB", ["country"] = "bi" },
+        };
+        var names = ScenarioLoader.Load(files, new Dictionary<string, object?> { ["markets"] = markets }).Select(s => s.Name);
+        Directory.Delete(dir, true);
+        Assert.Equal(new[]
+        {
+            "VTC_coverage_Net", "VTC_coverage_Province", "VTB_coverage_Net", "VTB_coverage_Province",
+            "VTC_sample_Net", "VTC_sample_Province", "VTB_sample_Net", "VTB_sample_Province",
+        }, names);
+    }
 }
