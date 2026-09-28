@@ -20,7 +20,11 @@ public static partial class ScenarioLoader
     [GeneratedRegex(@"\$\{([\w.]+)\}")]
     private static partial Regex VarRegex();
 
-    public static List<Scenario> Load(IEnumerable<string> paths)
+    /// <summary>
+    /// Load scenario files. <paramref name="globalVars"/> (config.yaml <c>vars</c>) are available to every
+    /// file, e.g. the list of markets: <c>matrix: {market: "${markets}"}</c>.
+    /// </summary>
+    public static List<Scenario> Load(IEnumerable<string> paths, IReadOnlyDictionary<string, object?>? globalVars = null)
     {
         var result = new List<Scenario>();
         var deserializer = new DeserializerBuilder().Build();
@@ -28,7 +32,8 @@ public static partial class ScenarioLoader
         {
             var doc = Normalize(deserializer.Deserialize<object?>(File.ReadAllText(path))) as Dictionary<string, object?>
                       ?? new Dictionary<string, object?>();
-            var fileVars = Map(doc.GetValueOrDefault("vars"));
+            var fileVars = new Dictionary<string, object?>(globalVars ?? new Dictionary<string, object?>());
+            foreach (var kv in Map(doc.GetValueOrDefault("vars"))) fileVars[kv.Key] = kv.Value;
             var before = List(doc.GetValueOrDefault("before"));
             var after = List(doc.GetValueOrDefault("after"));
 
@@ -38,10 +43,16 @@ public static partial class ScenarioLoader
                 if (Args.IsTrue(raw.GetValueOrDefault("skip"))) continue;
                 var rawName = raw.GetValueOrDefault("name")?.ToString() ?? Path.GetFileNameWithoutExtension(path);
 
-                foreach (var combo in ExpandMatrix(Map(raw.GetValueOrDefault("matrix"))))
+                var baseVars = new Dictionary<string, object?>(fileVars);
+                foreach (var kv in Map(raw.GetValueOrDefault("vars"))) baseVars[kv.Key] = kv.Value;
+                var matrix = Map(Render(raw.GetValueOrDefault("matrix"), baseVars));
+                foreach (var (key, values) in matrix)
+                    if (values is string sv && sv.Contains("${"))
+                        throw new StepException($"{path}: matrix '{key}' uses an unknown variable: {sv}");
+
+                foreach (var combo in ExpandMatrix(matrix))
                 {
-                    var vars = new Dictionary<string, object?>(fileVars);
-                    foreach (var kv in Map(raw.GetValueOrDefault("vars"))) vars[kv.Key] = kv.Value;
+                    var vars = new Dictionary<string, object?>(baseVars);
                     foreach (var kv in combo) vars[kv.Key] = kv.Value;
 
                     var name = (string)Render(rawName, vars)!;
@@ -65,6 +76,16 @@ public static partial class ScenarioLoader
             }
         }
         return result;
+    }
+
+    /// <summary>Run market by market (order of config.yaml <c>markets</c>): one country switch per market.</summary>
+    public static List<Scenario> OrderByMarket(List<Scenario> scenarios, object? markets)
+    {
+        if (markets is not List<object?> list || list.Count == 0) return scenarios;
+        static string? Code(object? m) => m is Dictionary<string, object?> d ? Args.Str(d.GetValueOrDefault("code")) : m?.ToString();
+        var codes = list.Select(Code).ToList();
+        // OrderBy is stable: KPI order within a market is kept.
+        return scenarios.OrderBy(s => codes.IndexOf(Code(s.Vars.GetValueOrDefault("market")))).ToList();
     }
 
     public static List<Scenario> Filter(List<Scenario> scenarios, List<string> only, List<string> tags)
@@ -154,7 +175,7 @@ public static partial class ScenarioLoader
     }
 
     /// <summary>YamlDotNet gives Dictionary&lt;object, object&gt;; convert to string keys.</summary>
-    private static object? Normalize(object? o) => o switch
+    public static object? Normalize(object? o) => o switch
     {
         IDictionary<object, object?> d => d.ToDictionary(kv => kv.Key.ToString()!, kv => Normalize(kv.Value)),
         IList<object?> l => l.Select(Normalize).ToList(),

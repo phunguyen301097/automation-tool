@@ -82,12 +82,12 @@ try
             return 0;
 
         case "list":
-            foreach (var s in ScenarioLoader.Load(ScenarioFiles(files)))
+            foreach (var s in LoadOrdered())
                 Console.WriteLine($"{s.Name,-50} {string.Join(",", s.Tags),-20} {s.Source}");
             return 0;
 
         case "run":
-            var scenarios = ScenarioLoader.Filter(ScenarioLoader.Load(ScenarioFiles(files)), only, tags);
+            var scenarios = ScenarioLoader.Filter(LoadOrdered(), only, tags);
             if (scenarios.Count == 0)
             {
                 Console.Error.WriteLine("No scenario matched");
@@ -126,6 +126,9 @@ catch (StepException e)
     Console.Error.WriteLine(e.Message);
     return 1;
 }
+
+List<Scenario> LoadOrdered() =>
+    ScenarioLoader.OrderByMarket(ScenarioLoader.Load(ScenarioFiles(files), config.Vars), config.Vars.GetValueOrDefault("markets"));
 
 static List<string> ScenarioFiles(List<string> patterns)
 {

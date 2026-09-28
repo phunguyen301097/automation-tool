@@ -1,5 +1,6 @@
-# Topology Stock  (8 file, theo Weplan_export.docx)
+# Topology Stock  (8 file mỗi thị trường, theo Weplan_export.docx)
 #
+#   Chạy cho mọi thị trường trong config.yaml (vars.markets): VTC, STL, VTL, MYN, VTB, VTZ, MVT, NCM
 #   Lần 1 - mức toàn mạng (Net): Macro data      Lần 2 - mức tỉnh (Province): By provinces
 #
 #     VTB_2026_T8_Topology Stock_Net_5G            VTB_2026_T8_Topology Stock_Province_5G
@@ -7,23 +8,23 @@
 #     VTB_2026_T8_Topology Stock_Net_3G            VTB_2026_T8_Topology Stock_Province_3G
 #     VTB_2026_T8_Topology Stock_Net_2G            VTB_2026_T8_Topology Stock_Province_2G
 #
-# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ
+# Tên file: Mã thị trường_Năm_Tháng_Loại KPI_Mức mạng/tỉnh_Công nghệ, lưu trong downloads/<mã thị trường>/
 #
 # Trang này không chọn Date; Năm/Tháng trong tên file là tháng trước.
 # Filter được tìm theo nhãn "Technology" trên trang.
 #
 # Chạy:  weplan-export run scenarios/topology_stock.yaml
+#        weplan-export run scenarios/topology_stock.yaml -k "VTC_*"     (chỉ một thị trường)
 
 vars:
-  market: VTB
-  country: Burundi
   kpi: Topology Stock
   page: /app/bi/topologyStock
 
 scenarios:
-  - name: ${market}_${kpi}_${level.name}_${tech.name}
+  - name: ${market.code}_${kpi}_${level.name}_${tech.name}
     tags: [topology_stock, monthly]
     matrix:
+      market: "${markets}"               # mọi thị trường trong config.yaml
       level:                               # Mức: toàn mạng / tỉnh
         - {name: Net, view: macro}         #   Macro data
         - {name: Province, view: admin_1}  #   By provinces
@@ -33,12 +34,12 @@ scenarios:
         - {name: 3G, technology: UMTS}
         - {name: 2G, technology: GSM}
     steps:
+      - select_country: ${market.country}                     # chọn quốc gia của thị trường
       - open_menu: ${page}
-      - select_country: ${country}
       - select_filter: {id: carrier_filter, all: true}          # Cellular network: Select all
       - select_filter: {label: "Technology", options: ["${tech.technology}"]}
       - choose_view: ${level.view}                              # Macro data / By provinces
       - wait_for_table: {}
       - download_table:                                         # Download table -> As XLSX
           format: xlsx
-          filename: "${market}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"
+          filename: "${market.code}/${market.code}_${year}_T${month}_${kpi}_${level.name}_${tech.name}"

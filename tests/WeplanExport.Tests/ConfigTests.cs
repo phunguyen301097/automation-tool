@@ -115,4 +115,44 @@ public class ConfigTests
         Assert.Equal("VTB_2026_T8_Coverage time_Net_All", Steps.SafeFileName("VTB_2026_T8_Coverage time_Net_All"));
         Assert.Equal("a_b_c", Steps.SafeFileName("a:b?c"));
     }
+
+    [Fact]
+    public void Markets_FromGlobalVars()
+    {
+        var file = Path.GetTempFileName();
+        File.WriteAllText(file, """
+            scenarios:
+              - name: ${market.code}_${t}
+                matrix: {market: "${markets}", t: [a, b]}
+                steps: [{select_country: "${market.country}"}]
+            """);
+        var markets = new List<object?>
+        {
+            new Dictionary<string, object?> { ["code"] = "VTC", ["country"] = "kh" },
+            new Dictionary<string, object?> { ["code"] = "VTB", ["country"] = "bi" },
+        };
+        var sc = ScenarioLoader.Load(new[] { file }, new Dictionary<string, object?> { ["markets"] = markets });
+        Assert.Equal(new[] { "VTC_a", "VTC_b", "VTB_a", "VTB_b" }, sc.Select(s => s.Name));
+        Assert.Equal("bi", sc[2].Steps[0].Args);
+        var reordered = ScenarioLoader.OrderByMarket(Enumerable.Reverse(sc).ToList(), markets);
+        Assert.Equal(new[] { "VTC_b", "VTC_a", "VTB_b", "VTB_a" }, reordered.Select(s => s.Name));
+        Assert.Throws<StepException>(() => ScenarioLoader.Load(new[] { file })); // no markets defined
+        File.Delete(file);
+    }
+
+    [Fact]
+    public void Config_ReadsMarkets()
+    {
+        var file = Path.GetTempFileName();
+        File.WriteAllText(file, """
+            vars:
+              markets:
+                - {code: VTC, country: kh}
+            """);
+        var cfg = AppConfig.Load(file);
+        File.Delete(file);
+        var markets = Assert.IsType<List<object?>>(cfg.Vars["markets"]);
+        var first = Assert.IsType<Dictionary<string, object?>>(markets[0]);
+        Assert.Equal("kh", first["country"]);
+    }
 }

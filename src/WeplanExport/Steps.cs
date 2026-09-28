@@ -935,7 +935,11 @@ public static class Steps
         var timeout = a.GetInt("timeout", ctx.Timeouts.DataLoad);
         var minRows = a.GetInt("min_rows", 1);
         var rowsSel = a.Get("rows") ?? ctx.Sel.TableRows;
+        // Results shown, nothing loading and still no rows after this long -> the table is empty
+        // (e.g. no 5G measurements in a market). 0 disables it.
+        var emptyAfter = a.GetInt("empty_after_ms", 20_000);
         var sw = Stopwatch.StartNew();
+        Stopwatch? emptyFor = null;
         while (true)
         {
             await CheckErrorAsync(ctx);
@@ -943,6 +947,20 @@ public static class Steps
             var rows = resultsVisible ? await page.Locator(rowsSel).CountAsync() : 0;
             var loading = !string.IsNullOrEmpty(ctx.Sel.Loading) && await page.Locator(ctx.Sel.Loading).CountAsync() > 0;
             if (resultsVisible && rows >= minRows && !loading) break;
+            if (resultsVisible && rows == 0 && !loading && emptyAfter > 0)
+            {
+                emptyFor ??= Stopwatch.StartNew();
+                if (emptyFor.ElapsedMilliseconds >= emptyAfter)
+                {
+                    ctx.Vars["rows"] = 0;
+                    ctx.Log($"  WARNING: table is empty (no data for these filters) after {sw.Elapsed.TotalSeconds:0.0}s");
+                    return;
+                }
+            }
+            else
+            {
+                emptyFor = null;
+            }
             if (sw.ElapsedMilliseconds > timeout)
                 throw new StepException($"Timed out after {timeout / 1000}s waiting for table " +
                                         $"(results visible={resultsVisible}, rows={rows}, loading={loading})");
@@ -1013,7 +1031,8 @@ public static class Steps
         if (await download.FailureAsync() is { } failure) throw new StepException($"Download failed: {failure}");
         var size = new FileInfo(target).Length;
         ctx.Log($"  saved {target} ({size:N0} bytes, server name '{suggested}')");
-        var rows = a.GetBool("verify", true) ? VerifyFile(target) : -1;
+        var tableEmpty = ctx.Vars.TryGetValue("rows", out var r) && Args.Str(r) == "0";
+        var rows = a.GetBool("verify", true) && !tableEmpty ? VerifyFile(target) : -1;
         if (rows >= 0) ctx.Log($"  verified: {rows} data rows");
         ctx.Downloads.Add(new DownloadInfo(target, size, suggested, rows));
     }

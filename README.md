@@ -146,8 +146,27 @@ steps:
   - download_table: {format: xlsx, filename: "VTB_${year}_T${month}_Coverage time_Net_${tech.name}"}
 ```
 
+**Thị trường**: mọi KPI chạy cho từng thị trường khai báo trong `config.yaml` (`vars.markets`):
+
+| Mã | Quốc gia | `country` (mã trong ô chọn quốc gia) |
+|---|---|---|
+| VTC | Cambodia | kh |
+| STL | Laos | la |
+| VTL | Timor-Leste | tl |
+| MYN | Myanmar | mm |
+| VTB | Burundi | bi |
+| VTZ | Tanzania | tz |
+| MVT | Mozambique | mz |
+| NCM | Haiti | ht |
+
+Tool chạy lần lượt **từng thị trường** (hết 76 file của VTC rồi mới sang STL...), lưu file vào
+`downloads/<mã>/`. Chạy một thị trường: `-k "VTC_*"`; một KPI của một thị trường:
+`run scenarios/latency.yaml -k "VTZ_*"`. Bỏ / thêm thị trường: sửa danh sách trong `config.yaml`.
+Nếu bảng không có dữ liệu (ví dụ thị trường chưa có 5G), sau 20 giây tool ghi cảnh báo
+`table is empty` và vẫn tải file.
+
 Các kịch bản hàng tháng theo `Weplan_export.docx` (mỗi KPI: mức toàn mạng + mức tỉnh, xuất As XLSX,
-tên `VTB_<năm>_T<tháng>_<KPI>_<Net|Province>_<công nghệ>`):
+tên `<mã>_<năm>_T<tháng>_<KPI>_<Net|Province>_<công nghệ>`, số file tính cho mỗi thị trường):
 
 | File | Trang | Tách theo | Số file |
 |---|---|---|---|

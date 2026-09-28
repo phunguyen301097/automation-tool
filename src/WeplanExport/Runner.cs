@@ -248,7 +248,7 @@ public static class Runner
         return outDir;
     }
 
-    private static readonly HashSet<string> FirstNavSteps = new() { "goto", "open_menu", "menu" };
+    private static readonly HashSet<string> FirstNavSteps = new() { "goto", "open_menu", "menu", "select_country", "country" };
 
     /// <summary>
     /// Run scenarios one after another. By default all scenarios share one browser page (one

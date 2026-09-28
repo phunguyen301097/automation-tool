@@ -16,6 +16,9 @@ public class AppConfig
     public DateConfig Date { get; set; } = new();
     public PopupConfig Popups { get; set; } = new();
 
+    /// <summary>Variables available to every scenario file (e.g. <c>markets</c>).</summary>
+    public Dictionary<string, object?> Vars { get; set; } = new();
+
     /// <summary>Aliases for the visualization cards ("Select a visualization mode").</summary>
     public Dictionary<string, string> Views { get; set; } = new()
     {
@@ -36,6 +39,7 @@ public class AppConfig
         var cfg = deserializer.Deserialize<AppConfig?>(File.ReadAllText(path)) ?? new AppConfig();
         // Merge view aliases instead of replacing them.
         foreach (var kv in new AppConfig().Views) cfg.Views.TryAdd(kv.Key, kv.Value);
+        cfg.Vars = cfg.Vars.ToDictionary(kv => kv.Key, kv => ScenarioLoader.Normalize(kv.Value));
         return cfg;
     }
 }

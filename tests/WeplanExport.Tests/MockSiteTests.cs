@@ -480,41 +480,6 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         throw new FileNotFoundException(relative);
     }
 
-    [Fact]
-    public async Task CoverageTime_MonthlyScenarios()
-    {
-        // The real scenarios/coverage_time.yaml: 2 levels x 3 technologies, named files.
-        var config = Config();
-        var results = await Runner.RunAsync(ScenarioLoader.Load(new[] { RepoFile("scenarios/coverage_time.yaml") }),
-            config, new RunOptions());
-        Assert.True(results.All(r => r.Status == "PASS"), string.Join("; ", results.Select(r => $"{r.Scenario}: {r.Error}")));
-        Assert.Equal(6, results.Count);
-
-        var today = DateOnly.FromDateTime(DateTime.Today);
-        var last = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
-        var first = new DateOnly(last.Year, last.Month, 1);
-        var coverage = new Dictionary<string, string>
-        {
-            ["All"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
-            ["5G"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED",
-            ["4G"] = "4G",
-        };
-        foreach (var (level, view) in new[] { ("Net", "byCountry"), ("Province", "byRegions") })
-        {
-            foreach (var (tech, cov) in coverage)
-            {
-                var file = Path.Combine(config.OutputDir, $"VTB_{last.Year}_T{last.Month}_Coverage time_{level}_{tech}.xlsx");
-                Assert.True(File.Exists(file), file);
-                var data = ReadXlsx(file);
-                Assert.Equal("bi", data["country"]);
-                Assert.Equal($"{first:yyyy-MM-dd}..{last:yyyy-MM-dd}", data["date"]);
-                Assert.Equal("ECONET|LUMITEL|ONAMOB|SMART", data["carrier"]);
-                Assert.Equal(cov, data["coverage"]);
-                Assert.Equal(view, data["view"]);
-            }
-        }
-    }
-
     private static readonly Dictionary<string, string> Cov = new()
     {
         ["All"] = "5G_SA|5G_NSA_CONNECTED|5G_NSA_NOT_RESTRICTED|5G_NSA_RESTRICTED|4G|3G|2G",
@@ -530,6 +495,7 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
     /// <summary>file -> (page path, expected file name parts and mock state), from Weplan_export.docx.</summary>
     private static (string Path, List<(string Name, Dictionary<string, string> State)> Expected) KpiCase(string file) => file switch
     {
+        "coverage_time.yaml" => ("/app/bi/coverage", CoverageKpi("Coverage time")),
         "signal_strength.yaml" => ("/app/bi/signal", CoverageKpi("Signal strength")),
         "data_traffic.yaml" => ("/app/bi/traffic", CoverageKpi("Data traffic")),
         "latency.yaml" => ("/app/bi/latencyMobile", CoverageKpi("Latency")),
@@ -553,7 +519,13 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         _ => throw new ArgumentException(file),
     };
 
+    private static readonly Dictionary<string, object?> VtbOnly = new()
+    {
+        ["markets"] = new List<object?> { new Dictionary<string, object?> { ["code"] = "VTB", ["country"] = "bi" } },
+    };
+
     [Theory]
+    [InlineData("coverage_time.yaml")]
     [InlineData("signal_strength.yaml")]
     [InlineData("data_traffic.yaml")]
     [InlineData("latency.yaml")]
@@ -570,17 +542,18 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
     {
         var (path, expected) = KpiCase(fileName);
         var config = Config();
-        var results = await Runner.RunAsync(ScenarioLoader.Load(new[] { RepoFile($"scenarios/{fileName}") }),
+        var results = await Runner.RunAsync(ScenarioLoader.Load(new[] { RepoFile($"scenarios/{fileName}") }, VtbOnly),
             config, new RunOptions());
         Assert.True(results.All(r => r.Status == "PASS"), string.Join("; ", results.Select(r => $"{r.Scenario}: {r.Error}")));
         Assert.Equal(expected.Count, results.Count);
-        Assert.Equal(expected.Count, Directory.GetFiles(config.OutputDir, "*.xlsx").Length);
+        var outDir = Path.Combine(config.OutputDir, "VTB");
+        Assert.Equal(expected.Count, Directory.GetFiles(outDir, "*.xlsx").Length);
 
         var today = DateOnly.FromDateTime(DateTime.Today);
         var last = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
         foreach (var (name, state) in expected)
         {
-            var file = Path.Combine(config.OutputDir, $"VTB_{last.Year}_T{last.Month}_{name}.xlsx");
+            var file = Path.Combine(outDir, $"VTB_{last.Year}_T{last.Month}_{name}.xlsx");
             Assert.True(File.Exists(file), file);
             var data = ReadXlsx(file);
             Assert.Equal(path, data["kpi"]);
@@ -588,5 +561,60 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
             Assert.Equal("ECONET|LUMITEL|ONAMOB|SMART", data["carrier"]);
             foreach (var (key, value) in state) Assert.Equal(value, data.GetValueOrDefault(key) ?? "");
         }
+    }
+
+    [Fact]
+    public async Task ScenariosRunForEachMarket()
+    {
+        // Markets from config.yaml: country switched per market, files per market folder, market by market.
+        var markets = new List<object?>
+        {
+            new Dictionary<string, object?> { ["code"] = "VTC", ["country"] = "kh" },
+            new Dictionary<string, object?> { ["code"] = "VTB", ["country"] = "bi" },
+        };
+        var files = new[] { RepoFile("scenarios/sample.yaml"), RepoFile("scenarios/coverage_time.yaml") };
+        var scenarios = ScenarioLoader.OrderByMarket(
+            ScenarioLoader.Load(files, new Dictionary<string, object?> { ["markets"] = markets }), markets);
+        Assert.Equal(Enumerable.Repeat("VTC", 8).Concat(Enumerable.Repeat("VTB", 8)), scenarios.Select(s => s.Name.Split('_')[0]));
+
+        var config = Config();
+        var results = await Runner.RunAsync(scenarios, config, new RunOptions());
+        Assert.True(results.All(r => r.Status == "PASS"), string.Join("; ", results.Select(r => $"{r.Scenario}: {r.Error}")));
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var last = new DateOnly(today.Year, today.Month, 1).AddDays(-1);
+        foreach (var (code, country, carrier) in new[] { ("VTC", "kh", "CELLCARD|METFONE|SMART"), ("VTB", "bi", "ECONET|LUMITEL|ONAMOB|SMART") })
+        {
+            var got = Directory.GetFiles(Path.Combine(config.OutputDir, code), "*.xlsx");
+            Assert.Equal(8, got.Length);
+            foreach (var f in got)
+            {
+                Assert.StartsWith($"{code}_{last.Year}_T{last.Month}_", Path.GetFileName(f));
+                var data = ReadXlsx(f);
+                Assert.Equal(country, data["country"]);
+                Assert.Equal(carrier, data["carrier"]);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EmptyTable_IsExportedWithWarning()
+    {
+        var (results, log) = await RunCapturedAsync("""
+            scenarios:
+              - name: haiti_5g
+                steps:
+                  - select_country: ht
+                  - goto: /app/bi/coverage
+                  - set_date: {preset: Last month}
+                  - select_filter: {id: coverage_filter, options: [5G_SA]}
+                  - choose_view: macro
+                  - wait_for_table: {empty_after_ms: 3000}
+                  - download_table: {format: xlsx, filename: empty}
+            """);
+        var r = Assert.Single(results);
+        Assert.True(r.Ok, r.Error);
+        Assert.Contains("table is empty", log);
+        Assert.Equal("empty.xlsx", Path.GetFileName(r.Downloads[0].File));
     }
 }
