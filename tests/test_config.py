@@ -81,3 +81,14 @@ def test_markets_from_global_vars(tmp_path):
     assert [s.name for s in reordered] == ["VTC_b", "VTC_a", "VTB_b", "VTB_a"]
     with pytest.raises(ValueError, match="unknown variable"):
         load_scenarios([f])  # no markets defined
+
+
+def test_exclude_filter(tmp_path):
+    f = tmp_path / "s.yaml"
+    f.write_text(yaml.safe_dump({"scenarios": [
+        {"name": "${m}_${k}", "matrix": {"m": ["VTB", "VTC"], "k": ["Coverage time", "Sample"]}, "steps": []}]}))
+    sc = load_scenarios([f])
+    assert [s.name for s in filter_scenarios(sc, None, None, ["VTB_Sample"])] == \
+        ["VTB_Coverage time", "VTC_Coverage time", "VTC_Sample"]
+    assert [s.name for s in filter_scenarios(sc, ["VTC_*"], None, ["*_Sample"])] == ["VTC_Coverage time"]
+    assert [s.name for s in filter_scenarios(sc, None, None, ["VTB_*", "*_Sample"])] == ["VTC_Coverage time"]

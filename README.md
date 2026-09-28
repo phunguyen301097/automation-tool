@@ -43,6 +43,7 @@ python -m weplan_export run                         # chạy tất cả scenario
 python -m weplan_export run scenarios/coverage_macro.yaml
 python -m weplan_export run scenarios/examples/advanced.yaml   # chạy file ví dụ
 python -m weplan_export run -k "coverage_*"         # lọc theo tên (glob)
+python -m weplan_export run -e "VTB_Sample_*"       # chạy tất cả, TRỪ các kịch bản khớp mẫu (lặp lại -e được)
 python -m weplan_export run -t daily                # lọc theo tag
 python -m weplan_export run --headed --slow-mo 300  # xem trình duyệt chạy, chậm lại để quan sát
 python -m weplan_export run --trace                 # ghi Playwright trace để debug

@@ -230,10 +230,13 @@ def order_by_market(scenarios: list[Scenario], markets: list | None) -> list[Sce
     return sorted(scenarios, key=key)  # stable: KPI order within a market is kept
 
 
-def filter_scenarios(scenarios: list[Scenario], only: list[str] | None, tags: list[str] | None) -> list[Scenario]:
+def filter_scenarios(scenarios: list[Scenario], only: list[str] | None, tags: list[str] | None,
+                     exclude: list[str] | None = None) -> list[Scenario]:
     out = scenarios
     if only:
         out = [s for s in out if any(fnmatch.fnmatch(s.name, pat) for pat in only)]
     if tags:
         out = [s for s in out if set(tags) & set(s.tags)]
+    if exclude:
+        out = [s for s in out if not any(fnmatch.fnmatch(s.name, pat) for pat in exclude)]
     return out

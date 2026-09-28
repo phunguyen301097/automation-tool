@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="run scenarios")
     r.add_argument("files", nargs="*", help="scenario YAML files (default: scenarios/*.yaml)")
     r.add_argument("-k", "--only", action="append", help="run only scenarios whose name matches (glob, repeatable)")
+    r.add_argument("-e", "--exclude", action="append", help="skip scenarios whose name matches (glob, repeatable)")
     r.add_argument("-t", "--tag", action="append", help="run only scenarios with this tag (repeatable)")
     r.add_argument("--headed", action="store_true", help="show the browser")
     r.add_argument("--slow-mo", type=int, default=None, help="slow down each action (ms)")
@@ -74,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{s.name:50} {','.join(s.tags):20} {s.source}")
         return 0
 
-    scenarios = filter_scenarios(scenarios, args.only, args.tag)
+    scenarios = filter_scenarios(scenarios, args.only, args.tag, args.exclude)
     if not scenarios:
         sys.exit("No scenario matched")
     if args.dry_run:
