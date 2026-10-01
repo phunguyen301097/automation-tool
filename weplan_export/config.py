@@ -103,6 +103,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # seconds, [min, max] (random in between) or "min-max"; 0 = no pause.
     "throttle": {
         "pause_between": 0,        # between two scenarios
+        "pause_between_steps": 0,  # between two steps of one scenario (e.g. [2, 5])
         "pause_after_market": 0,   # instead of pause_between when the next scenario is another market
         "max_exports": 0,          # stop after this many files in one run (0 = no limit); --resume continues
     },

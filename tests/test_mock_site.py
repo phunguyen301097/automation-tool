@@ -659,3 +659,13 @@ def test_not_logged_in_stops_instead_of_retrying(tmp_path, config, monkeypatch):
     assert [r.status for r in results] == ["STOPPED", "NOT RUN", "NOT RUN"]
     assert "Not logged in" in results[0].error
     assert len(calls) == 1
+
+
+def test_pause_between_steps(tmp_path, config):
+    config["throttle"]["pause_between_steps"] = [0.4, 0.5]
+    doc = {"scenarios": [{"name": "a", "steps": [
+        {"goto": "/app/bi/coverage"}, {"wait": 0}, {"wait": 0}]}]}
+    t0 = time.time()
+    results = _run(tmp_path, config, doc)
+    assert results[0].ok, results[0].error
+    assert time.time() - t0 >= 0.8  # 2 pauses: before step 2 and step 3, none before step 1

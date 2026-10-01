@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
                         "and run the rest")
     r.add_argument("--pause", metavar="SEC",
                    help="rest between exports: seconds or min-max, e.g. 30-60 (config: throttle.pause_between)")
+    r.add_argument("--step-pause", metavar="SEC",
+                   help="rest between the steps of one export, e.g. 2-5 (config: throttle.pause_between_steps)")
     r.add_argument("--market-pause", metavar="SEC",
                    help="rest after finishing a market, e.g. 300-600 (config: throttle.pause_after_market)")
     r.add_argument("--max-exports", type=int, metavar="N",
@@ -82,12 +84,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         from .config import pause_range
         throttle = config.setdefault("throttle", {})
-        for opt, key in (("pause", "pause_between"), ("market_pause", "pause_after_market"),
+        for opt, key in (("pause", "pause_between"), ("step_pause", "pause_between_steps"),
+                         ("market_pause", "pause_after_market"),
                          ("max_exports", "max_exports")):
             if getattr(args, opt) is not None:
                 throttle[key] = getattr(args, opt)
         try:
             pause_range(throttle.get("pause_between"))
+            pause_range(throttle.get("pause_between_steps"))
             pause_range(throttle.get("pause_after_market"))
         except ValueError as e:
             sys.exit(str(e))
@@ -126,8 +130,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Running {len(scenarios)} scenario(s):")
     t = config.get("throttle") or {}
-    if any(t.get(k) for k in ("pause_between", "pause_after_market", "max_exports")):
-        print(f"Throttle: pause {t.get('pause_between') or 0}s between exports, "
+    if any(t.get(k) for k in ("pause_between", "pause_between_steps", "pause_after_market", "max_exports")):
+        print(f"Throttle: pause {t.get('pause_between_steps') or 0}s between steps, "
+              f"{t.get('pause_between') or 0}s between exports, "
               f"{t.get('pause_after_market') or 0}s after each market, "
               f"max {t.get('max_exports') or 'unlimited'} file(s) this run")
     for s in scenarios:

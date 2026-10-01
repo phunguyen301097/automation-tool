@@ -235,13 +235,14 @@ def _market_code(sc: Scenario) -> str | None:
     return m.get("code") if isinstance(m, dict) else m
 
 
-def _pause(seconds: float, why: str, state: "_RunState", page) -> None:
+def _pause(seconds: float, why: str | None, state: "_RunState", page) -> None:
     """Sleep in small chunks so closing the browser or Ctrl+C still stops the run at once."""
     if seconds <= 0:
         return
     until = dt.datetime.now() + dt.timedelta(seconds=seconds)
     mins, secs = divmod(int(round(seconds)), 60)
-    log(f"{why}: pausing {f'{mins}m ' if mins else ''}{secs}s (until {until:%H:%M:%S})")
+    if why:
+        log(f"{why}: pausing {f'{mins}m ' if mins else ''}{secs}s (until {until:%H:%M:%S})")
     end = time.time() + seconds
     while not state.stop_reason and (left := end - time.time()) > 0:
         chunk = min(1.0, left)
@@ -327,6 +328,7 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
         throttle = config.get("throttle") or {}
         between = pause_range(throttle.get("pause_between"))
         after_market = pause_range(throttle.get("pause_after_market"))
+        step_pause = pause_range(throttle.get("pause_between_steps"))
         max_exports = int(throttle.get("max_exports") or 0)
         exported = 0
 
@@ -377,6 +379,10 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                     fn = STEPS.get(name)
                     if fn is None:
                         raise StepError(f"Unknown step '{name}'. Available: {sorted(STEPS)}")
+                    if i > 1 and step_pause[1] > 0:
+                        _pause(random.uniform(*step_pause), None, state, page)
+                        if state.stop_reason:
+                            raise StepError(f"Stopped: {state.stop_reason}")
                     log(f"- {current}")
                     reason = blocked_reason(page, config)
                     if reason:
