@@ -866,4 +866,18 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Assert.Equal(new[] { "STOPPED", "NOT RUN" }, results.Select(r => r.Status));
         Assert.Contains("Not logged in", results[0].Error);
     }
+
+    [Fact]
+    public async Task Pause_Between_Steps()
+    {
+        var config = Config();
+        config.Throttle.PauseBetweenSteps = new List<object?> { "0.4", "0.5" };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var results = await RunYamlAsync("""
+            scenarios:
+              - {name: a, steps: [{goto: /app/bi/coverage}, {wait: 0}, {wait: 0}]}
+            """, config);
+        Assert.True(results[0].Ok, results[0].Error);
+        Assert.True(sw.Elapsed.TotalSeconds >= 0.8); // 2 pauses: before step 2 and step 3
+    }
 }

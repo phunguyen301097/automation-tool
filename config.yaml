@@ -49,6 +49,7 @@ date:
 throttle:
   # Nghỉ giữa các lần xuất (giây). Ghi 1 số, [min, max] (ngẫu nhiên trong khoảng) hoặc 0 để tắt.
   pause_between: [30, 60]        # nghỉ giữa 2 kịch bản (2 lần xuất)
+  pause_between_steps: [2, 5]    # nghỉ giữa các step trong 1 lần xuất (chọn ngày, filter, view, download...)
   pause_after_market: [300, 600] # xong 1 thị trường thì nghỉ 5-10 phút (dùng cùng run_order: market)
   max_exports: 0                 # xuất đủ N file thì dừng, hôm sau chạy lại với --resume (0 = không giới hạn)
 

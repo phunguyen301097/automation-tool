@@ -81,6 +81,8 @@ Thêm `--dry-run` để xem trước những kịch bản sẽ chạy.
 
 **Nghỉ giữa các lần xuất** (mục `throttle` trong `config.yaml`): tránh gọi dashboard liên tục.
 - `pause_between`: nghỉ giữa 2 kịch bản. Ghi số giây (`45`), khoảng ngẫu nhiên `[30, 60]` hoặc `"30-60"`.
+- `pause_between_steps`: nghỉ giữa các step trong 1 lần xuất (mở trang → chọn ngày → filter → view → chờ
+  bảng → Download), ví dụ `[2, 5]` giây. Ghi đè khi chạy: `--step-pause 2-5`.
 - `pause_after_market`: nghỉ dài hơn khi **xong 1 thị trường** (kịch bản kế tiếp là thị trường khác), ví dụ
   `[300, 600]` = 5–10 phút. Nên dùng cùng `run_order: market` (hoặc `--order market`): xong hết các trang của
   1 nước rồi nghỉ. Với `run_order: page`, thị trường đổi sau mỗi ~6 file nên sẽ nghỉ rất nhiều lần.

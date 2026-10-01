@@ -173,6 +173,8 @@ public class ThrottleConfig
 {
     /// <summary>Between two scenarios.</summary>
     public object? PauseBetween { get; set; }
+    /// <summary>Between two steps of one scenario (e.g. [2, 5]).</summary>
+    public object? PauseBetweenSteps { get; set; }
     /// <summary>Instead of PauseBetween when the next scenario is another market.</summary>
     public object? PauseAfterMarket { get; set; }
     /// <summary>Stop after this many files in one run (0 = no limit); --resume continues.</summary>

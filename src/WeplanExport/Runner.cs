@@ -287,12 +287,12 @@ public static class Runner
     };
 
     /// <summary>Sleep in small chunks so closing the browser or Ctrl+C still stops the run at once.</summary>
-    private static async Task PauseAsync(double seconds, string why, RunState state)
+    private static async Task PauseAsync(double seconds, string? why, RunState state)
     {
         if (seconds <= 0) return;
         var until = DateTime.Now.AddSeconds(seconds);
         var total = (int)Math.Round(seconds);
-        Log($"{why}: pausing {(total >= 60 ? $"{total / 60}m " : "")}{total % 60}s (until {until:HH:mm:ss})");
+        if (why is not null) Log($"{why}: pausing {(total >= 60 ? $"{total / 60}m " : "")}{total % 60}s (until {until:HH:mm:ss})");
         while (state.StopReason is null && DateTime.Now < until)
             await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(500, Math.Max(1, (until - DateTime.Now).TotalMilliseconds))));
     }
@@ -360,6 +360,7 @@ public static class Runner
             Scenario? previous = null;
             var between = ThrottleConfig.Range(config.Throttle.PauseBetween);
             var afterMarket = ThrottleConfig.Range(config.Throttle.PauseAfterMarket);
+            var stepPause = ThrottleConfig.Range(config.Throttle.PauseBetweenSteps);
             var exported = 0;
 
             for (var idx = 0; idx < scenarios.Count; idx++)
@@ -426,6 +427,11 @@ public static class Runner
                         current = $"{i + 1}. {step.Name}";
                         if (!Steps.Registry.TryGetValue(step.Name, out var def))
                             throw new StepException($"Unknown step '{step.Name}'. Available: {string.Join(", ", Steps.Registry.Keys.Order())}");
+                        if (i > 0 && stepPause.Max > 0)
+                        {
+                            await PauseAsync(Random.Shared.NextDouble() * (stepPause.Max - stepPause.Min) + stepPause.Min, null, state);
+                            if (state.StopReason is not null) throw new StepException($"Stopped: {state.StopReason}");
+                        }
                         Log($"- {current}");
                         if (await BlockedReasonAsync(page, config) is { } blocked) throw new AccountBlockedException(blocked);
                         if (config.Popups.AutoDismiss && step.Name is not ("dismiss_popups" or "close_popups"))
