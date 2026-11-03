@@ -107,6 +107,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pause_after_market": 0,   # instead of pause_between when the next scenario is another market
         "max_exports": 0,          # stop after this many files in one run (0 = no limit); --resume continues
     },
+    # Exported files are named <code>_<year>_T<month>_... . With delete_other_months, once the
+    # first file of a new run is downloaded, files of other months in output_dir are deleted
+    # (never on --resume, and never before something new was exported).
+    "cleanup": {
+        "delete_other_months": False,
+    },
     # Aliases for the visualization cards ("Select a visualization mode").
     "views": {
         "macro": "#byCountry",

@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="rest after finishing a market, e.g. 300-600 (config: throttle.pause_after_market)")
     r.add_argument("--max-exports", type=int, metavar="N",
                    help="stop after N files; continue later with --resume (config: throttle.max_exports)")
+    r.add_argument("--no-cleanup", action="store_true",
+                   help="keep files of other months this time (config: cleanup.delete_other_months)")
     r.add_argument("--order", choices=["page", "market"], default=None,
                    help="page: each page for all markets, then the next page (default); "
                         "market: all pages of one market, then the next market")
@@ -142,7 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         results = run_scenarios(scenarios, config, headed=True if args.headed else None,
                             slow_mo=args.slow_mo, trace=args.trace, stop_on_fail=args.stop_on_fail,
-                            isolated=True if args.isolated else None, done=done)
+                            isolated=True if args.isolated else None, done=done,
+                            cleanup=not (args.resume or args.no_cleanup))
     except KeyboardInterrupt:
         return 130
     return 0 if all(r.ok for r in results) else 1

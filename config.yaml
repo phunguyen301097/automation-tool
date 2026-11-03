@@ -53,6 +53,11 @@ throttle:
   pause_after_market: [300, 600] # xong 1 thị trường thì nghỉ 5-10 phút (dùng cùng run_order: market)
   max_exports: 0                 # xuất đủ N file thì dừng, hôm sau chạy lại với --resume (0 = không giới hạn)
 
+cleanup:
+  # Chạy mới (không --resume): sau khi tải xong file đầu tiên, xoá các file đã export của tháng khác
+  # trong downloads/ (ví dụ đang xuất T9 thì xoá file T8). Thư mục _runs, _inspect, manual không bị đụng tới.
+  delete_other_months: true
+
 popups:
   auto_dismiss: true             # tự đóng popup thông báo (What's New...) chặn trang
 

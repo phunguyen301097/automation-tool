@@ -669,3 +669,48 @@ def test_pause_between_steps(tmp_path, config):
     results = _run(tmp_path, config, doc)
     assert results[0].ok, results[0].error
     assert time.time() - t0 >= 0.8  # 2 pauses: before step 2 and step 3, none before step 1
+
+
+def test_new_run_deletes_files_of_other_months(tmp_path, config, capsys):
+    import datetime as dt
+    last = dt.date.today().replace(day=1) - dt.timedelta(days=1)
+    out = Path(config["output_dir"])
+    old = [out / "VTC" / "VTC_2020_T8_Coverage time_Net_All.xlsx", out / "VTB" / "VTB_2020_T8_Sample_Net_All.csv"]
+    keep = [out / "VTC" / f"VTC_{last.year}_T{last.month}_Coverage time_Net_5G.xlsx",
+            out / "VTC" / "notes.xlsx", out / "manual" / "VTC_2020_T8_x_y.xlsx",
+            out / "_runs" / "x" / "VTC_2020_T8_x_y.xlsx"]
+    for f in old + keep:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x")
+    config["cleanup"]["delete_other_months"] = True
+    doc = {"scenarios": [{"name": "exp", "steps": [
+        {"goto": "/app/bi/coverage"},
+        {"set_date": {"preset": "Last month"}},
+        {"choose_view": "macro"},
+        {"wait_for_table": {}},
+        {"download_table": {"format": "xlsx", "filename": "VTB/VTB_${year}_T${month}_Sample_Net_All"}},
+    ]}]}
+    results = _run(tmp_path, config, doc)
+    assert results[0].ok, results[0].error
+    assert not any(f.exists() for f in old)
+    assert all(f.exists() for f in keep)
+    assert (out / "VTB" / f"VTB_{last.year}_T{last.month}_Sample_Net_All.xlsx").exists()
+    assert "Cleanup: deleted 2 file(s) of other months (2020-8)" in capsys.readouterr().out
+
+
+def test_no_cleanup_on_resume_or_before_any_download(tmp_path, config):
+    out = Path(config["output_dir"])
+    old = out / "VTC" / "VTC_2020_T8_Coverage time_Net_All.xlsx"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"x")
+    config["cleanup"]["delete_other_months"] = True
+    f = tmp_path / "s.yaml"
+    f.write_text(yaml.safe_dump({"scenarios": [{"name": "nav", "steps": [{"goto": "/app/bi/coverage"}]}]}))
+    run_scenarios(load_scenarios([f]), config)  # nothing downloaded -> nothing deleted
+    assert old.exists()
+    doc = {"scenarios": [{"name": "exp", "steps": [
+        {"goto": "/app/bi/coverage"}, {"set_date": {"preset": "Last month"}}, {"choose_view": "macro"},
+        {"wait_for_table": {}}, {"download_table": {"format": "csv", "filename": "x"}}]}]}
+    f.write_text(yaml.safe_dump(doc))
+    run_scenarios(load_scenarios([f]), config, cleanup=False)  # --resume / --no-cleanup
+    assert old.exists()

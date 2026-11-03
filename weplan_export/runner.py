@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import os
 import random
+import re
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -255,6 +256,29 @@ def _pause(seconds: float, why: str | None, state: "_RunState", page) -> None:
             time.sleep(0.1)
 
 
+_MONTH_FILE_RE = re.compile(r"^[A-Za-z0-9]+_(\d{4})_T(\d{1,2})_.+\.(xlsx|xls|csv|json)$", re.IGNORECASE)
+_KEEP_DIRS = {"_runs", "_inspect", "manual"}
+
+
+def delete_other_months(output_dir: str | Path, year: int, month: int) -> list[Path]:
+    """Delete exported files (<code>_<year>_T<month>_...) of any month other than year/month."""
+    root = Path(output_dir)
+    deleted: list[Path] = []
+    if not root.is_dir():
+        return deleted
+    for path in root.rglob("*"):
+        if not path.is_file() or _KEEP_DIRS & set(path.relative_to(root).parts[:-1]):
+            continue
+        m = _MONTH_FILE_RE.match(path.name)
+        if m and (int(m.group(1)), int(m.group(2))) != (int(year), int(month)):
+            try:
+                path.unlink()
+                deleted.append(path)
+            except OSError as e:
+                log(f"Cleanup: could not delete {path}: {e}")
+    return deleted
+
+
 class _RunState:
     """Tracks whether the user closed the browser / pressed Ctrl+C, to stop the whole run."""
 
@@ -279,7 +303,8 @@ _FIRST_NAV_STEPS = {"goto", "open_menu", "menu", "select_country", "country"}
 
 def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None = None,
                   slow_mo: int | None = None, trace: bool = False, stop_on_fail: bool = False,
-                  isolated: bool | None = None, done: list[str] | None = None) -> list[Result]:
+                  isolated: bool | None = None, done: list[str] | None = None,
+                  cleanup: bool = True) -> list[Result]:
     """Run scenarios one after another.
 
     By default all scenarios share one browser page (one window with --headed, a single
@@ -435,6 +460,18 @@ def run_scenarios(scenarios: list[Scenario], config: dict, headed: bool | None =
                         state.closing = False
             results.append(res)
             exported += len(res.downloads)
+            if cleanup and res.downloads and (config.get("cleanup") or {}).get("delete_other_months"):
+                cleanup = False  # once per run, after the first file of this run is saved
+                year, month = sctx.vars.get("year"), sctx.vars.get("month")
+                try:
+                    removed = delete_other_months(out_root, int(year), int(month))
+                except (TypeError, ValueError):
+                    removed = []
+                    log(f"Cleanup skipped: unknown export month ({year}-{month})")
+                if removed:
+                    months = sorted({"-".join(_MONTH_FILE_RE.match(p.name).group(1, 2)) for p in removed})
+                    log(f"Cleanup: deleted {len(removed)} file(s) of other months ({', '.join(months)}), "
+                        f"keeping {year}-T{month}")
             save_progress()
             previous_failed = not res.ok
             if state.stop_reason:
