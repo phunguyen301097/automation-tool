@@ -880,4 +880,58 @@ public class MockSiteTests : IClassFixture<MockServer>, IDisposable
         Assert.True(results[0].Ok, results[0].Error);
         Assert.True(sw.Elapsed.TotalSeconds >= 0.8); // 2 pauses: before step 2 and step 3
     }
+
+    private const string ExportOne = """
+        scenarios:
+          - name: exp
+            steps:
+              - goto: /app/bi/coverage
+              - set_date: {preset: Last month}
+              - choose_view: macro
+              - wait_for_table: {}
+              - download_table: {format: xlsx, filename: "VTB/VTB_${year}_T${month}_Sample_Net_All"}
+        """;
+
+    [Fact]
+    public async Task New_Run_Deletes_Files_Of_Other_Months()
+    {
+        var config = Config();
+        config.Cleanup.DeleteOtherMonths = true;
+        var last = DateTime.Today.AddDays(1 - DateTime.Today.Day).AddDays(-1);
+        var outDir = config.OutputDir;
+        string F(params string[] parts) => Path.Combine(new[] { outDir }.Concat(parts).ToArray());
+        var old = new[] { F("VTC", "VTC_2020_T8_Coverage time_Net_All.xlsx"), F("VTB", "VTB_2020_T8_Sample_Net_All.csv") };
+        var keep = new[]
+        {
+            F("VTC", $"VTC_{last.Year}_T{last.Month}_Coverage time_Net_5G.xlsx"), F("VTC", "notes.xlsx"),
+            F("manual", "VTC_2020_T8_x_y.xlsx"), F("_runs", "x", "VTC_2020_T8_x_y.xlsx"),
+        };
+        foreach (var f in old.Concat(keep))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(f)!);
+            await File.WriteAllTextAsync(f, "x");
+        }
+        var (results, log) = await RunCapturedAsync(ExportOne, config);
+        Assert.True(results[0].Ok, results[0].Error);
+        Assert.All(old, f => Assert.False(File.Exists(f), f));
+        Assert.All(keep, f => Assert.True(File.Exists(f), f));
+        Assert.True(File.Exists(F("VTB", $"VTB_{last.Year}_T{last.Month}_Sample_Net_All.xlsx")));
+        Assert.Contains("Cleanup: deleted 2 file(s) of other months (2020-8)", log);
+    }
+
+    [Fact]
+    public async Task No_Cleanup_On_Resume_Or_Before_Any_Download()
+    {
+        var config = Config();
+        config.Cleanup.DeleteOtherMonths = true;
+        var old = Path.Combine(config.OutputDir, "VTC", "VTC_2020_T8_Coverage time_Net_All.xlsx");
+        Directory.CreateDirectory(Path.GetDirectoryName(old)!);
+        await File.WriteAllTextAsync(old, "x");
+        await RunYamlAsync("scenarios: [{name: nav, steps: [{goto: /app/bi/coverage}]}]", config);
+        Assert.True(File.Exists(old)); // nothing downloaded -> nothing deleted
+        var file = Path.Combine(_tmp, "one.yaml");
+        await File.WriteAllTextAsync(file, ExportOne);
+        await Runner.RunAsync(ScenarioLoader.Load(new[] { file }), config, new RunOptions { Cleanup = false });
+        Assert.True(File.Exists(old)); // --resume / --no-cleanup
+    }
 }

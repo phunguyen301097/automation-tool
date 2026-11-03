@@ -21,6 +21,7 @@ public class AppConfig
     public DateConfig Date { get; set; } = new();
     public PopupConfig Popups { get; set; } = new();
     public ThrottleConfig Throttle { get; set; } = new();
+    public CleanupConfig Cleanup { get; set; } = new();
 
     /// <summary>Variables available to every scenario file (e.g. <c>markets</c>).</summary>
     public Dictionary<string, object?> Vars { get; set; } = new();
@@ -202,4 +203,14 @@ public class ThrottleConfig
         if (lo < 0 || hi < lo) throw new StepException($"Invalid pause '{value}': use seconds, [min, max] or \"min-max\"");
         return (lo, hi);
     }
+}
+
+/// <summary>
+/// Exported files are named &lt;code&gt;_&lt;year&gt;_T&lt;month&gt;_... . With DeleteOtherMonths, once the
+/// first file of a new run is downloaded, files of other months in output_dir are deleted
+/// (never on --resume, and never before something new was exported).
+/// </summary>
+public class CleanupConfig
+{
+    public bool DeleteOtherMonths { get; set; }
 }

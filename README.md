@@ -91,6 +91,13 @@ Thêm `--dry-run` để xem trước những kịch bản sẽ chạy.
 - Ghi đè khi chạy: `--pause 30-60`, `--market-pause 300-600`, `--max-exports 100` (`--pause 0` để tắt).
 - Đang nghỉ vẫn đóng trình duyệt / Ctrl+C được, log ghi `pausing 45s (until 14:03:12)`.
 
+**Xoá file tháng cũ** (`cleanup.delete_other_months: true`): khi chạy mới, ngay sau khi tải xong file đầu tiên
+của tháng đang xuất, tool xoá các file đã export của **tháng khác** trong `downloads/` (ví dụ xuất T9 thì xoá
+`VTC_2026_T8_...`). Chỉ xoá file đúng mẫu tên `<mã>_<năm>_T<tháng>_...` (.xlsx/.csv/.json); không đụng tới
+`_runs`, `_inspect`, `manual`. Không xoá khi chạy `--resume`, khi `--dry-run`, hoặc khi chưa tải được file nào
+(ví dụ tài khoản bị khoá ngay từ đầu). Muốn giữ lại lần này: `--no-cleanup`. Log ghi
+`Cleanup: deleted 608 file(s) of other months (2026-8), keeping 2026-T9`.
+
 **Tài khoản bị khoá / bị đăng xuất**: trước mỗi bước (và khi một bước lỗi) tool kiểm tra trang có thông báo
 kiểu *"Your account has been temporarily suspended..."* (danh sách ở `auth.blocked_texts`) hoặc bị chuyển về
 trang đăng nhập. Nếu có, tool **dừng cả lượt chạy ngay** (STOPPED / NOT RUN, chụp màn hình thông báo), không

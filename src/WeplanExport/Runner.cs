@@ -28,6 +28,8 @@ public class RunOptions
     public bool? Isolated { get; init; }
     /// <summary>Scenarios finished in an earlier run (--resume): recorded as DONE in this run's report.</summary>
     public List<string> Done { get; init; } = new();
+    /// <summary>Allow cleanup.delete_other_months in this run (false on --resume / --no-cleanup).</summary>
+    public bool Cleanup { get; init; } = true;
 }
 
 /// <summary>The dashboard shows a suspension notice or the login page: stop the whole run.</summary>
@@ -297,6 +299,36 @@ public static class Runner
             await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(500, Math.Max(1, (until - DateTime.Now).TotalMilliseconds))));
     }
 
+    private static readonly Regex MonthFileRe =
+        new(@"^[A-Za-z0-9]+_(\d{4})_T(\d{1,2})_.+\.(xlsx|xls|csv|json)$", RegexOptions.IgnoreCase);
+
+    private static readonly HashSet<string> KeepDirs = new() { "_runs", "_inspect", "manual" };
+
+    /// <summary>Delete exported files (&lt;code&gt;_&lt;year&gt;_T&lt;month&gt;_...) of any month other than year/month.</summary>
+    public static List<string> DeleteOtherMonths(string outputDir, int year, int month)
+    {
+        var deleted = new List<string>();
+        if (!Directory.Exists(outputDir)) return deleted;
+        foreach (var path in Directory.EnumerateFiles(outputDir, "*", SearchOption.AllDirectories).ToList())
+        {
+            var dirs = Path.GetRelativePath(outputDir, Path.GetDirectoryName(path)!)
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (dirs.Any(KeepDirs.Contains)) continue;
+            var m = MonthFileRe.Match(Path.GetFileName(path));
+            if (!m.Success || (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)) == (year, month)) continue;
+            try
+            {
+                File.Delete(path);
+                deleted.Add(path);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Log($"Cleanup: could not delete {path}: {e.Message}");
+            }
+        }
+        return deleted;
+    }
+
     private static readonly HashSet<string> FirstNavSteps = new() { "goto", "open_menu", "menu", "select_country", "country" };
 
     /// <summary>
@@ -362,6 +394,7 @@ public static class Runner
             var afterMarket = ThrottleConfig.Range(config.Throttle.PauseAfterMarket);
             var stepPause = ThrottleConfig.Range(config.Throttle.PauseBetweenSteps);
             var exported = 0;
+            var cleanup = opts.Cleanup && config.Cleanup.DeleteOtherMonths;
 
             for (var idx = 0; idx < scenarios.Count; idx++)
             {
@@ -500,6 +533,25 @@ public static class Runner
                 }
                 results.Add(res);
                 exported += res.Downloads.Count;
+                if (cleanup && res.Downloads.Count > 0)
+                {
+                    cleanup = false; // once per run, after the first file of this run is saved
+                    var (year, month) = (sctx.Vars.GetValueOrDefault("year"), sctx.Vars.GetValueOrDefault("month"));
+                    if (int.TryParse(year?.ToString(), out var y) && int.TryParse(month?.ToString(), out var m))
+                    {
+                        var removed = DeleteOtherMonths(outRoot, y, m);
+                        if (removed.Count > 0)
+                        {
+                            var months = removed.Select(p => MonthFileRe.Match(Path.GetFileName(p)))
+                                .Select(x => $"{x.Groups[1].Value}-{x.Groups[2].Value}").Distinct().Order();
+                            Log($"Cleanup: deleted {removed.Count} file(s) of other months ({string.Join(", ", months)}), keeping {y}-T{m}");
+                        }
+                    }
+                    else
+                    {
+                        Log($"Cleanup skipped: unknown export month ({year}-{month})");
+                    }
+                }
                 SaveProgress();
                 previousFailed = !res.Ok;
                 Log(state.StopReason is not null

@@ -27,6 +27,7 @@ Commands:
       --market-pause <sec|min-max>
                                 rest after finishing a market, e.g. 300-600 (config: throttle.pause_after_market)
       --max-exports <n>         stop after n files; continue later with --resume (config: throttle.max_exports)
+      --no-cleanup              keep files of other months this time (config: cleanup.delete_other_months)
       --dry-run                 only print the expanded scenarios
   list [files...]               list scenarios
   steps                         list available step types
@@ -50,6 +51,7 @@ var files = new List<string>();
 var only = new List<string>();
 var exclude = new List<string>();
 var tags = new List<string>();
+bool noCleanup = false;
 bool headed = false, trace = false, stopOnFail = false, dryRun = false, isolated = false;
 int? slowMo = null;
 var view = "macro";
@@ -73,6 +75,7 @@ for (var i = 1; i < rest.Count; i++)
             resume = i + 1 < rest.Count && !rest[i + 1].StartsWith('-') && !rest[i + 1].EndsWith(".yaml") ? rest[++i] : "latest";
             break;
         case "--isolated": isolated = true; break;
+        case "--no-cleanup": noCleanup = true; break;
         case "--view": view = rest[++i]; break;
         case "--order": order = rest[++i]; break;
         case "--pause": pause = rest[++i]; break;
@@ -167,6 +170,7 @@ try
                 StopOnFail = stopOnFail,
                 Isolated = isolated ? true : null,
                 Done = done,
+                Cleanup = resume is null && !noCleanup,
             });
             return results.All(r => r.Ok) ? 0 : 1;
 
